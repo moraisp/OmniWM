@@ -64,6 +64,26 @@ Reason: Applies without manual edits, touches only Swift/test files, and passes 
 Backport commit: this commit
 ```
 
+### `8a48b368e79c2366da692e6a2d2517f81dd39026`
+
+```text
+Commit: 8a48b368e79c2366da692e6a2d2517f81dd39026
+Original subject: Fix Emacs full-rescan eviction
+Touched Swift files:
+- Sources/OmniWM/Core/Ax/AXWindow.swift
+- Sources/OmniWM/Core/Ax/AppAXContext.swift
+- Tests/OmniWMTests/AXWindowServiceTests.swift
+- Tests/OmniWMTests/RefreshRoutingTests.swift
+Touched Zig/build files: none
+Bug reproducible on 6fde9b9? unknown; source commit adds focused regression coverage for top-level AX window admission
+Tests added or updated:
+- AXWindowServiceTests
+- RefreshRoutingTests
+Action: direct-dry-run
+Reason: Cherry-pick applies without manual edits, touches only Swift/test files, and passes the staged no-Zig audit.
+Backport commit: this commit
+```
+
 ### `349247c73bf3f5b1cd84fab5cde8baa25fdb7651`
 
 ```text
