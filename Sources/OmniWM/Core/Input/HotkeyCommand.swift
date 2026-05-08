@@ -25,6 +25,9 @@ enum HotkeyCommand: Codable, Equatable, Hashable {
     case toggleFullscreen
     case toggleNativeFullscreen
     case moveColumn(Direction)
+    case moveColumnToFirst
+    case moveColumnToLast
+    case moveColumnToIndex(Int)
     case toggleColumnTabbed
 
     case focusDownOrLeft

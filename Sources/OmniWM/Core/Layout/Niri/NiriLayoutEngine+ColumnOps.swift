@@ -287,6 +287,92 @@ extension NiriLayoutEngine {
         let step = (direction == .right) ? 1 : -1
         let targetIdx = currentIdx + step
         guard targetIdx >= 0, targetIdx < cols.count else { return false }
+        return moveColumn(
+            column,
+            to: targetIdx,
+            in: workspaceId,
+            motion: motion,
+            state: &state,
+            workingFrame: workingFrame,
+            gaps: gaps
+        )
+    }
+
+    func moveColumnToFirst(
+        _ column: NiriContainer,
+        in workspaceId: WorkspaceDescriptor.ID,
+        motion: MotionSnapshot,
+        state: inout ViewportState,
+        workingFrame: CGRect,
+        gaps: CGFloat
+    ) -> Bool {
+        moveColumnToIndex(
+            column,
+            1,
+            in: workspaceId,
+            motion: motion,
+            state: &state,
+            workingFrame: workingFrame,
+            gaps: gaps
+        )
+    }
+
+    func moveColumnToLast(
+        _ column: NiriContainer,
+        in workspaceId: WorkspaceDescriptor.ID,
+        motion: MotionSnapshot,
+        state: inout ViewportState,
+        workingFrame: CGRect,
+        gaps: CGFloat
+    ) -> Bool {
+        moveColumnToIndex(
+            column,
+            Int.max,
+            in: workspaceId,
+            motion: motion,
+            state: &state,
+            workingFrame: workingFrame,
+            gaps: gaps
+        )
+    }
+
+    func moveColumnToIndex(
+        _ column: NiriContainer,
+        _ oneBasedIndex: Int,
+        in workspaceId: WorkspaceDescriptor.ID,
+        motion: MotionSnapshot,
+        state: inout ViewportState,
+        workingFrame: CGRect,
+        gaps: CGFloat
+    ) -> Bool {
+        let cols = columns(in: workspaceId)
+        guard !cols.isEmpty else { return false }
+
+        let targetIdx = min(oneBasedIndex <= 1 ? 0 : oneBasedIndex - 1, cols.count - 1)
+        return moveColumn(
+            column,
+            to: targetIdx,
+            in: workspaceId,
+            motion: motion,
+            state: &state,
+            workingFrame: workingFrame,
+            gaps: gaps
+        )
+    }
+
+    private func moveColumn(
+        _ column: NiriContainer,
+        to targetIdx: Int,
+        in workspaceId: WorkspaceDescriptor.ID,
+        motion: MotionSnapshot,
+        state: inout ViewportState,
+        workingFrame: CGRect,
+        gaps: CGFloat
+    ) -> Bool {
+        let cols = columns(in: workspaceId)
+        guard let currentIdx = columnIndex(of: column, in: workspaceId),
+              cols.indices.contains(targetIdx)
+        else { return false }
         if targetIdx == currentIdx { return false }
 
         let currentColX = state.columnX(at: currentIdx, columns: cols, gap: gaps)
@@ -299,6 +385,7 @@ extension NiriLayoutEngine {
             ) + gaps
 
         guard let root = roots[workspaceId] else { return false }
+        cancelInteractiveResizeForMovedColumn(column, in: workspaceId)
         root.insertChild(column, at: targetIdx)
 
         let newCols = columns(in: workspaceId)
@@ -355,6 +442,21 @@ extension NiriLayoutEngine {
         )
 
         return true
+    }
+
+    private func cancelInteractiveResizeForMovedColumn(
+        _ column: NiriContainer,
+        in workspaceId: WorkspaceDescriptor.ID
+    ) {
+        guard let resize = interactiveResize, resize.workspaceId == workspaceId else { return }
+        guard let resizeWindow = findNode(by: resize.windowId) as? NiriWindow,
+              let resizeColumn = findColumn(containing: resizeWindow, in: workspaceId),
+              resizeColumn === column
+        else {
+            return
+        }
+
+        clearInteractiveResize()
     }
 
     func consumeOrExpelWindow(

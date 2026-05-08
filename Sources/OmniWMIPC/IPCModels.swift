@@ -239,6 +239,9 @@ public enum IPCCommandName: String, Codable, CaseIterable, Equatable, Sendable {
     case focusMonitorNext = "focus-monitor-next"
     case focusMonitorLast = "focus-monitor-last"
     case moveColumn = "move-column"
+    case moveColumnToFirst = "move-column-to-first"
+    case moveColumnToLast = "move-column-to-last"
+    case moveColumnToIndex = "move-column-to-index"
     case moveColumnToWorkspace = "move-column-to-workspace"
     case moveColumnToWorkspaceUp = "move-column-to-workspace-up"
     case moveColumnToWorkspaceDown = "move-column-to-workspace-down"
@@ -353,6 +356,9 @@ public enum IPCCommandRequest: Equatable, Sendable {
     case focusMonitorNext
     case focusMonitorLast
     case moveColumn(direction: IPCDirection)
+    case moveColumnToFirst
+    case moveColumnToLast
+    case moveColumnToIndex(columnIndex: Int)
     case moveColumnToWorkspace(workspaceNumber: Int)
     case moveColumnToWorkspaceUp
     case moveColumnToWorkspaceDown
@@ -447,6 +453,12 @@ public enum IPCCommandRequest: Equatable, Sendable {
             .focusMonitorLast
         case .moveColumn:
             .moveColumn
+        case .moveColumnToFirst:
+            .moveColumnToFirst
+        case .moveColumnToLast:
+            .moveColumnToLast
+        case .moveColumnToIndex:
+            .moveColumnToIndex
         case .moveColumnToWorkspace:
             .moveColumnToWorkspace
         case .moveColumnToWorkspaceUp:
@@ -657,6 +669,14 @@ public enum IPCCommandRequest: Equatable, Sendable {
             self = .focusMonitorLast
         case .moveColumn:
             self = .moveColumn(direction: try requireDirection())
+        case .moveColumnToFirst:
+            try requireNoArguments()
+            self = .moveColumnToFirst
+        case .moveColumnToLast:
+            try requireNoArguments()
+            self = .moveColumnToLast
+        case .moveColumnToIndex:
+            self = .moveColumnToIndex(columnIndex: try requireInteger())
         case .moveColumnToWorkspace:
             self = .moveColumnToWorkspace(workspaceNumber: try requireInteger())
         case .moveColumnToWorkspaceUp:
@@ -877,6 +897,13 @@ extension IPCCommandRequest: Codable {
         case .moveColumn:
             let arguments = try container.decode(IPCDirectionArguments.self, forKey: .arguments)
             self = .moveColumn(direction: arguments.direction)
+        case .moveColumnToFirst:
+            self = .moveColumnToFirst
+        case .moveColumnToLast:
+            self = .moveColumnToLast
+        case .moveColumnToIndex:
+            let arguments = try container.decode(IPCColumnIndexArguments.self, forKey: .arguments)
+            self = .moveColumnToIndex(columnIndex: arguments.columnIndex)
         case .moveColumnToWorkspace:
             let arguments = try container.decode(IPCWorkspaceNumberArguments.self, forKey: .arguments)
             self = .moveColumnToWorkspace(workspaceNumber: arguments.workspaceNumber)
@@ -1026,6 +1053,12 @@ extension IPCCommandRequest: Codable {
             break
         case let .moveColumn(direction):
             try container.encode(IPCDirectionArguments(direction: direction), forKey: .arguments)
+        case .moveColumnToFirst:
+            break
+        case .moveColumnToLast:
+            break
+        case let .moveColumnToIndex(columnIndex):
+            try container.encode(IPCColumnIndexArguments(columnIndex: columnIndex), forKey: .arguments)
         case let .moveColumnToWorkspace(workspaceNumber):
             try container.encode(IPCWorkspaceNumberArguments(workspaceNumber: workspaceNumber), forKey: .arguments)
         case .moveColumnToWorkspaceUp:

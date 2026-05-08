@@ -49,6 +49,24 @@ import OmniWMIPC
         #expect(wrapCommand == .focusWindowDownOrTop)
     }
 
+    @Test func parsesNiriColumnMoveCommands() throws {
+        let first = try CLIParser.parse(arguments: ["omniwmctl", "command", "move-column-to-first"])
+        let last = try CLIParser.parse(arguments: ["omniwmctl", "command", "move-column-to-last"])
+        let indexed = try CLIParser.parse(arguments: ["omniwmctl", "command", "move-column-to-index", "3"])
+
+        guard case let .command(firstCommand) = first.request.payload,
+              case let .command(lastCommand) = last.request.payload,
+              case let .command(indexedCommand) = indexed.request.payload
+        else {
+            Issue.record("Expected command payloads")
+            return
+        }
+
+        #expect(firstCommand == .moveColumnToFirst)
+        #expect(lastCommand == .moveColumnToLast)
+        #expect(indexedCommand == .moveColumnToIndex(columnIndex: 3))
+    }
+
     @Test func parsesResizeCommand() throws {
         let parsed = try CLIParser.parse(arguments: ["omniwmctl", "command", "resize", "left", "grow"])
 

@@ -205,6 +205,8 @@ enum ActionCatalog {
             action(id: "toggleNativeFullscreen", command: .toggleNativeFullscreen, category: .layout, binding: .unassigned),
             action(id: "moveColumn.left", command: .moveColumn(.left), category: .column, binding: KeyBinding(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | controlKey | shiftKey))),
             action(id: "moveColumn.right", command: .moveColumn(.right), category: .column, binding: KeyBinding(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(optionKey | controlKey | shiftKey))),
+            action(id: "moveColumnToFirst", command: .moveColumnToFirst, category: .column, binding: KeyBinding(keyCode: UInt32(kVK_Home), modifiers: UInt32(optionKey | controlKey))),
+            action(id: "moveColumnToLast", command: .moveColumnToLast, category: .column, binding: KeyBinding(keyCode: UInt32(kVK_End), modifiers: UInt32(optionKey | controlKey))),
             action(id: "toggleColumnTabbed", command: .toggleColumnTabbed, category: .column, binding: KeyBinding(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(optionKey))),
             action(id: "focusColumnFirst", command: .focusColumnFirst, category: .focus, binding: KeyBinding(keyCode: UInt32(kVK_Home), modifiers: UInt32(optionKey))),
             action(id: "focusColumnLast", command: .focusColumnLast, category: .focus, binding: KeyBinding(keyCode: UInt32(kVK_End), modifiers: UInt32(optionKey))),
@@ -227,6 +229,17 @@ enum ActionCatalog {
                     id: "focusWindowInColumn.\(idx)",
                     command: .focusWindowInColumn(idx),
                     category: .focus,
+                    binding: .unassigned
+                )
+            )
+        }
+
+        for idx in 1 ... 9 {
+            specs.append(
+                action(
+                    id: "moveColumnToIndex.\(idx)",
+                    command: .moveColumnToIndex(idx),
+                    category: .column,
                     binding: .unassigned
                 )
             )
@@ -313,7 +326,8 @@ enum ActionCatalog {
         case .moveToRoot, .toggleSplit, .swapSplit, .preselect, .preselectClear, .resizeInDirection:
             .dwindle
 
-        case .moveColumn, .moveColumnToWorkspace, .moveColumnToWorkspaceUp, .moveColumnToWorkspaceDown,
+        case .moveColumn, .moveColumnToFirst, .moveColumnToLast, .moveColumnToIndex,
+             .moveColumnToWorkspace, .moveColumnToWorkspaceUp, .moveColumnToWorkspaceDown,
              .toggleColumnFullWidth, .toggleColumnTabbed,
              .cycleWindowWidthForward, .cycleWindowWidthBackward,
              .cycleWindowHeightForward, .cycleWindowHeightBackward,
@@ -364,6 +378,9 @@ enum ActionCatalog {
         case .toggleFullscreen: "Toggle Fullscreen"
         case .toggleNativeFullscreen: "Toggle Native Fullscreen"
         case let .moveColumn(dir): "Move Column \(dir.displayName)"
+        case .moveColumnToFirst: "Move Column to First"
+        case .moveColumnToLast: "Move Column to Last"
+        case let .moveColumnToIndex(idx): "Move Column to Index \(idx)"
         case .toggleColumnTabbed: "Toggle Column Tabbed"
         case .focusDownOrLeft: "Traverse Backward"
         case .focusUpOrRight: "Traverse Forward"
@@ -467,6 +484,12 @@ enum ActionCatalog {
             .focusMonitorLast
         case .moveColumn:
             .moveColumn
+        case .moveColumnToFirst:
+            .moveColumnToFirst
+        case .moveColumnToLast:
+            .moveColumnToLast
+        case .moveColumnToIndex:
+            .moveColumnToIndex
         case .moveColumnToWorkspace:
             .moveColumnToWorkspace
         case .moveColumnToWorkspaceUp:

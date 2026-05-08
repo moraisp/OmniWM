@@ -4887,6 +4887,120 @@ private func makeCenteredCrossMonitorFixture(
         #expect(abs(viewStart - 308) < 0.1)
     }
 
+    @Test func moveColumnToIndexUsesNiriOneBasedClamping() {
+        let engine = NiriLayoutEngine(maxWindowsPerColumn: 1, maxVisibleColumns: 3)
+        let wsId = UUID()
+        let root = NiriRoot(workspaceId: wsId)
+        engine.roots[wsId] = root
+
+        let leftColumn = NiriContainer()
+        let movingColumn = NiriContainer()
+        let rightColumn = NiriContainer()
+        root.appendChild(leftColumn)
+        root.appendChild(movingColumn)
+        root.appendChild(rightColumn)
+        assignWidths(root.columns, widths: [300, 400, 500])
+
+        let leftWindow = NiriWindow(token: makeTestHandle(pid: 534).id)
+        let movingWindow = NiriWindow(token: makeTestHandle(pid: 535).id)
+        let rightWindow = NiriWindow(token: makeTestHandle(pid: 536).id)
+        leftColumn.appendChild(leftWindow)
+        movingColumn.appendChild(movingWindow)
+        rightColumn.appendChild(rightWindow)
+        engine.tokenToNode[leftWindow.token] = leftWindow
+        engine.tokenToNode[movingWindow.token] = movingWindow
+        engine.tokenToNode[rightWindow.token] = rightWindow
+
+        var state = ViewportState()
+        state.selectedNodeId = movingWindow.id
+        state.activeColumnIndex = 1
+        state.viewOffsetPixels = .static(0)
+
+        let movedToEnd = engine.moveColumnToIndex(
+            movingColumn,
+            99,
+            in: wsId,
+            motion: .disabled,
+            state: &state,
+            workingFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+            gaps: 8
+        )
+
+        #expect(movedToEnd)
+        #expect(engine.columns(in: wsId).compactMap { $0.windowNodes.first?.token.windowId } == [
+            leftWindow.token.windowId,
+            rightWindow.token.windowId,
+            movingWindow.token.windowId,
+        ])
+        #expect(state.activeColumnIndex == 2)
+
+        let movedToStart = engine.moveColumnToIndex(
+            movingColumn,
+            0,
+            in: wsId,
+            motion: .disabled,
+            state: &state,
+            workingFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+            gaps: 8
+        )
+
+        #expect(movedToStart)
+        #expect(engine.columns(in: wsId).compactMap { $0.windowNodes.first?.token.windowId } == [
+            movingWindow.token.windowId,
+            leftWindow.token.windowId,
+            rightWindow.token.windowId,
+        ])
+        #expect(state.activeColumnIndex == 0)
+    }
+
+    @Test func moveColumnToFirstLastUseSharedReorderPrimitiveAndCancelInteractiveResize() {
+        let fixture = makeVisibleColumnFixture(visibleCount: 2, extraColumns: 1)
+        let targetWindow = fixture.windows[1]
+        guard let targetColumn = fixture.engine.column(of: targetWindow) else {
+            Issue.record("Expected target column for column move cancellation test")
+            return
+        }
+
+        var state = ViewportState()
+        state.selectedNodeId = targetWindow.id
+        state.activeColumnIndex = 1
+        state.viewOffsetPixels = .static(0)
+
+        let didBeginResize = fixture.engine.interactiveResizeBegin(
+            windowId: targetWindow.id,
+            edges: .right,
+            startLocation: .zero,
+            in: fixture.workspaceId,
+            viewOffset: state.viewOffsetPixels.target()
+        )
+        #expect(didBeginResize)
+
+        let movedLast = fixture.engine.moveColumnToLast(
+            targetColumn,
+            in: fixture.workspaceId,
+            motion: .disabled,
+            state: &state,
+            workingFrame: fixture.monitor.visibleFrame,
+            gaps: fixture.gap
+        )
+
+        #expect(movedLast)
+        #expect(fixture.engine.interactiveResize == nil)
+        #expect(fixture.engine.columns(in: fixture.workspaceId).last === targetColumn)
+
+        let movedFirst = fixture.engine.moveColumnToFirst(
+            targetColumn,
+            in: fixture.workspaceId,
+            motion: .disabled,
+            state: &state,
+            workingFrame: fixture.monitor.visibleFrame,
+            gaps: fixture.gap
+        )
+
+        #expect(movedFirst)
+        #expect(fixture.engine.columns(in: fixture.workspaceId).first === targetColumn)
+    }
+
     @Test func moveWindowToWorkspaceThenInsertColumnPreservesSourceFallbackSelection() {
         let engine = NiriLayoutEngine(maxWindowsPerColumn: 3, maxVisibleColumns: 3)
         let sourceWorkspaceId = UUID()

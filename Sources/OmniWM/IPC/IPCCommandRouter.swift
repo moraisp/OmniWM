@@ -86,6 +86,15 @@ final class IPCCommandRouter {
             return focusLastMonitor()
         case let .moveColumn(ipcDirection):
             return controller.commandHandler.performCommand(.moveColumn(direction(for: ipcDirection)))
+        case .moveColumnToFirst:
+            return controller.commandHandler.performCommand(.moveColumnToFirst)
+        case .moveColumnToLast:
+            return controller.commandHandler.performCommand(.moveColumnToLast)
+        case let .moveColumnToIndex(columnIndex):
+            guard columnIndex >= 0 else {
+                return .invalidArguments
+            }
+            return controller.commandHandler.performCommand(.moveColumnToIndex(columnIndex))
         case let .moveColumnToWorkspace(workspaceNumber):
             guard let workspaceIndex = zeroBasedIndex(from: workspaceNumber) else {
                 return .invalidArguments

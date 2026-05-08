@@ -43,4 +43,14 @@ import Testing
         #expect(top.ipcCommandName == .focusWindowTop)
         #expect(top.ipcDescriptor?.path == "command focus-window top")
     }
+
+    @Test func niriColumnMoveActionsUsePublicCommandDescriptors() throws {
+        let first = try #require(ActionCatalog.spec(for: "moveColumnToFirst"))
+        let indexed = try #require(ActionCatalog.spec(for: "moveColumnToIndex.1"))
+
+        #expect(first.ipcCommandName == .moveColumnToFirst)
+        #expect(first.ipcDescriptor?.path == "command move-column-to-first")
+        #expect(indexed.ipcCommandName == .moveColumnToIndex)
+        #expect(indexed.ipcDescriptor?.path == "command move-column-to-index <number>")
+    }
 }

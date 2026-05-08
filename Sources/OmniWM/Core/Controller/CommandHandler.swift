@@ -71,6 +71,12 @@ final class CommandHandler {
             toggleNativeFullscreenForFocused()
         case let .moveColumn(direction):
             moveColumnInNiri(direction: direction)
+        case .moveColumnToFirst:
+            moveColumnToFirstInNiri()
+        case .moveColumnToLast:
+            moveColumnToLastInNiri()
+        case let .moveColumnToIndex(index):
+            moveColumnToIndexInNiri(index: index)
         case .toggleColumnTabbed:
             toggleColumnTabbedInNiri()
         case .focusDownOrLeft:
@@ -494,6 +500,58 @@ final class CommandHandler {
             let oldFrames = ctx.engine.captureWindowFrames(in: ctx.wsId)
             guard ctx.engine.moveColumn(
                 column, direction: direction, in: ctx.wsId,
+                motion: ctx.motion,
+                state: &state,
+                workingFrame: ctx.workingFrame,
+                gaps: ctx.gaps
+            ) else { return false }
+            return ctx.commitWithCapturedAnimation(state: state, oldFrames: oldFrames)
+        }
+    }
+
+    private func moveColumnToFirstInNiri() {
+        guard let controller else { return }
+        controller.niriLayoutHandler.withNiriOperationContext { ctx, state in
+            guard let column = ctx.engine.findColumn(containing: ctx.windowNode, in: ctx.wsId) else { return false }
+            let oldFrames = ctx.engine.captureWindowFrames(in: ctx.wsId)
+            guard ctx.engine.moveColumnToFirst(
+                column,
+                in: ctx.wsId,
+                motion: ctx.motion,
+                state: &state,
+                workingFrame: ctx.workingFrame,
+                gaps: ctx.gaps
+            ) else { return false }
+            return ctx.commitWithCapturedAnimation(state: state, oldFrames: oldFrames)
+        }
+    }
+
+    private func moveColumnToLastInNiri() {
+        guard let controller else { return }
+        controller.niriLayoutHandler.withNiriOperationContext { ctx, state in
+            guard let column = ctx.engine.findColumn(containing: ctx.windowNode, in: ctx.wsId) else { return false }
+            let oldFrames = ctx.engine.captureWindowFrames(in: ctx.wsId)
+            guard ctx.engine.moveColumnToLast(
+                column,
+                in: ctx.wsId,
+                motion: ctx.motion,
+                state: &state,
+                workingFrame: ctx.workingFrame,
+                gaps: ctx.gaps
+            ) else { return false }
+            return ctx.commitWithCapturedAnimation(state: state, oldFrames: oldFrames)
+        }
+    }
+
+    private func moveColumnToIndexInNiri(index: Int) {
+        guard let controller else { return }
+        controller.niriLayoutHandler.withNiriOperationContext { ctx, state in
+            guard let column = ctx.engine.findColumn(containing: ctx.windowNode, in: ctx.wsId) else { return false }
+            let oldFrames = ctx.engine.captureWindowFrames(in: ctx.wsId)
+            guard ctx.engine.moveColumnToIndex(
+                column,
+                index,
+                in: ctx.wsId,
                 motion: ctx.motion,
                 state: &state,
                 workingFrame: ctx.workingFrame,
