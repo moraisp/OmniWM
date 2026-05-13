@@ -34,9 +34,7 @@ struct QuakeTerminalFrameExport: Codable, Equatable {
     }
 }
 
-struct SettingsExport: Codable {
-    var version: Int = SettingsMigration.currentSettingsEpoch
-
+struct SettingsExport: Codable, Equatable {
     var hotkeysEnabled: Bool
     var focusFollowsMouse: Bool
     var moveMouseToFocusedWindow: Bool
@@ -84,6 +82,15 @@ struct SettingsExport: Codable {
     var workspaceBarBackgroundOpacity: Double
     var workspaceBarXOffset: Double
     var workspaceBarYOffset: Double
+    var workspaceBarAccentColorRed: Double
+    var workspaceBarAccentColorGreen: Double
+    var workspaceBarAccentColorBlue: Double
+    var workspaceBarAccentColorAlpha: Double
+    var workspaceBarTextColorRed: Double
+    var workspaceBarTextColorGreen: Double
+    var workspaceBarTextColorBlue: Double
+    var workspaceBarTextColorAlpha: Double
+    var workspaceBarLabelFontSize: Double
     var monitorBarSettings: [MonitorBarSettings]
 
     var appRules: [AppRule]
@@ -126,6 +133,8 @@ struct SettingsExport: Codable {
     var quakeTerminalCustomFrame: QuakeTerminalFrameExport?
 
     var appearanceMode: String
+
+    var capabilityOverrides: [WindowCapabilityProfileTOMLOverride] = []
 }
 
 // MARK: - Defaults & Diffing
@@ -175,6 +184,15 @@ extension SettingsExport {
             workspaceBarBackgroundOpacity: 0.1,
             workspaceBarXOffset: 0.0,
             workspaceBarYOffset: 0.0,
+            workspaceBarAccentColorRed: -1,
+            workspaceBarAccentColorGreen: -1,
+            workspaceBarAccentColorBlue: -1,
+            workspaceBarAccentColorAlpha: 1,
+            workspaceBarTextColorRed: -1,
+            workspaceBarTextColorGreen: -1,
+            workspaceBarTextColorBlue: -1,
+            workspaceBarTextColorAlpha: 1,
+            workspaceBarLabelFontSize: 12,
             monitorBarSettings: [],
             appRules: BuiltInSettingsDefaults.appRules,
             monitorOrientationSettings: [],
@@ -210,7 +228,8 @@ extension SettingsExport {
             quakeTerminalMonitorMode: QuakeTerminalMonitorMode.focusedWindow.rawValue,
             quakeTerminalUseCustomFrame: false,
             quakeTerminalCustomFrame: nil,
-            appearanceMode: AppearanceMode.dark.rawValue
+            appearanceMode: AppearanceMode.dark.rawValue,
+            capabilityOverrides: []
         )
     }
 
@@ -247,8 +266,8 @@ extension SettingsExport {
             defaultsDict["niriDefaultColumnWidth"] = NSNull()
         }
 
-        var filtered: [String: Any] = ["version": version]
-        for (key, value) in currentDict where key != "version" && key != "hotkeyBindings" {
+        var filtered: [String: Any] = [:]
+        for (key, value) in currentDict where key != "hotkeyBindings" {
             if let defaultValue = defaultsDict[key], jsonValuesEqual(value, defaultValue) {
                 continue
             }
@@ -377,6 +396,15 @@ extension SettingsStore {
             workspaceBarBackgroundOpacity: workspaceBarBackgroundOpacity,
             workspaceBarXOffset: workspaceBarXOffset,
             workspaceBarYOffset: workspaceBarYOffset,
+            workspaceBarAccentColorRed: -1,
+            workspaceBarAccentColorGreen: -1,
+            workspaceBarAccentColorBlue: -1,
+            workspaceBarAccentColorAlpha: 1,
+            workspaceBarTextColorRed: -1,
+            workspaceBarTextColorGreen: -1,
+            workspaceBarTextColorBlue: -1,
+            workspaceBarTextColorAlpha: 1,
+            workspaceBarLabelFontSize: 12,
             monitorBarSettings: monitorBarSettings,
             appRules: appRules,
             monitorOrientationSettings: monitorOrientationSettings,
@@ -412,7 +440,8 @@ extension SettingsStore {
             quakeTerminalMonitorMode: quakeTerminalMonitorMode.rawValue,
             quakeTerminalUseCustomFrame: quakeTerminalUseCustomFrame,
             quakeTerminalCustomFrame: quakeTerminalCustomFrame.map(QuakeTerminalFrameExport.init(frame:)),
-            appearanceMode: appearanceMode.rawValue
+            appearanceMode: appearanceMode.rawValue,
+            capabilityOverrides: []
         )
 
         let outputData = try export.exportData(mode: mode)
@@ -432,7 +461,6 @@ extension SettingsStore {
         monitors: [Monitor]? = nil
     ) throws {
         let rawData = try Data(contentsOf: url)
-        try SettingsMigration.validateImportEpoch(from: rawData)
         let mergedData = try SettingsExport.mergedImportData(from: rawData)
         let export = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
         applyImport(

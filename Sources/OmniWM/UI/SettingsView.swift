@@ -193,7 +193,7 @@ struct GeneralSettingsTab: View {
                     .foregroundColor(.secondary)
             }
 
-            Section("Config File") {
+            Section("Backup & Restore Config") {
                 HStack {
                     Button("Export Editable Config") {
                         performConfigFileAction(.export(.full))
@@ -211,29 +211,40 @@ struct GeneralSettingsTab: View {
 
                 HStack {
                     if !settings.settingsFileExists {
-                        Button("Create Config File") {
+                        Button("Create Backup File") {
                             performConfigFileAction(.create)
                         }
                     }
 
-                    Button("Reveal Settings File") {
+                    Button("Reveal Backup File") {
                         performConfigFileAction(.reveal)
                     }
 
-                    Button("Open Settings File") {
+                    Button("Open Backup File") {
                         performConfigFileAction(.open)
                     }
                 }
 
                 Text(
-                    "Editable Config writes the full canonical file. Compact Backup writes "
-                        + "only settings that differ from defaults. Import merges either "
-                        + "file back into the full settings model."
+                    "Editable Config writes a JSON backup of every setting. Compact Backup "
+                        + "writes only settings that differ from defaults. Import merges either "
+                        + "file back into the running settings."
                 )
                     .font(.caption)
                     .foregroundColor(.secondary)
 
                 Text("~/.config/omniwm/settings.json")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+
+                Divider()
+
+                Text("Canonical settings (live-reloaded from $EDITOR):")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Text("~/.config/omniwm/settings.toml")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .textSelection(.enabled)

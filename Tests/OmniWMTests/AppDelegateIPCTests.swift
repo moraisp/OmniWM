@@ -60,7 +60,7 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
         }
 
         let appDelegate = AppDelegate()
-        appDelegate.finishBootstrap(defaults: defaults)
+        appDelegate.finishBootstrap()
 
         #expect(observedControllerStatusBar)
         #expect(observedImagePosition != nil)
@@ -79,7 +79,7 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
         }
 
         let appDelegate = AppDelegate()
-        appDelegate.finishBootstrap(defaults: defaults)
+        appDelegate.finishBootstrap()
 
         #expect(observedStart == false)
     }
@@ -100,7 +100,7 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
         }
 
         let appDelegate = AppDelegate()
-        appDelegate.finishBootstrap(defaults: defaults)
+        appDelegate.finishBootstrap()
 
         #expect(observedControllerStatusBar)
     }
@@ -127,7 +127,7 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
         let appDelegate = AppDelegate()
         #expect(!FileManager.default.fileExists(atPath: socketPath))
 
-        appDelegate.finishBootstrap(defaults: defaults)
+        appDelegate.finishBootstrap()
 
         #expect(FileManager.default.fileExists(atPath: socketPath))
 

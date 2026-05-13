@@ -12,27 +12,13 @@ final class AppBootstrapState {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated(unsafe) static weak var sharedBootstrap: AppBootstrapState?
     static var ipcServerFactoryForTests: ((WMController) -> IPCServerLifecycle)?
-    static var updateCoordinatorFactoryForTests: ((SettingsStore, WMController, UserDefaults) -> any AppUpdateCoordinating)?
-    private static let desktopAndDockSettingsURL = URL(
-        string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension"
-    )!
-    private static let systemSettingsAppURL = URL(fileURLWithPath: "/System/Applications/System Settings.app")
-
-    private enum StartupModalAction {
-        case exportBackup
-        case reset
-        case quit
-    }
-
-    private enum SeparateSpacesModalAction {
-        case openSystemSettings
-        case quit
-    }
+    static var updateCoordinatorFactoryForTests: ((SettingsStore, WMController, RuntimeStateStore) -> any AppUpdateCoordinating)?
 
     private var statusBarController: StatusBarController?
     private var ipcServer: IPCServerLifecycle?
     private var cliManager: AppCLIManager?
     private var updateCoordinator: (any AppUpdateCoordinating)?
+    private var runtimeStateStore: RuntimeStateStore?
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -41,33 +27,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_: Notification) {
         AppDelegate.sharedBootstrap?.controller?.workspaceManager.flushPersistedWindowRestoreCatalogNow()
+        AppDelegate.sharedBootstrap?.settings?.flushNow()
         stopIPCServer()
+        runtimeStateStore?.flushNow()
     }
 
-    func bootstrapApplication(
-        defaults: UserDefaults = .standard,
-        spacesRequirement: DisplaysHaveSeparateSpacesRequirement = .init()
-    ) {
-        switch AppBootstrapPlanner.decision(appDefaults: defaults, spacesRequirement: spacesRequirement) {
+    func bootstrapApplication() {
+        switch AppBootstrapPlanner.decision() {
         case .boot:
-            finishBootstrap(defaults: defaults)
-        case let .requireSettingsReset(storedEpoch):
-            runStartupResetGate(storedEpoch: storedEpoch, defaults: defaults)
-        case .requireDisplaysHaveSeparateSpacesDisabled:
-            runDisplaysHaveSeparateSpacesGate()
+            finishBootstrap()
         }
     }
 
-    func finishBootstrap(defaults: UserDefaults) {
-        SettingsMigration.persistCurrentEpoch(defaults: defaults)
+    func finishBootstrap() {
+        // Settings-migration epoch persistence deleted under clean-break (PURGE-02);
+        // settings.toml IS the source of truth.
 
-        let settings = SettingsStore(defaults: defaults)
+        let configurationDirectory = SettingsFilePersistence.defaultDirectoryURL
+        let runtimeState = RuntimeStateStore(directory: configurationDirectory)
+        self.runtimeStateStore = runtimeState
+
+        let settings = SettingsStore(
+            persistence: SettingsFilePersistence(directory: configurationDirectory),
+            runtimeState: runtimeState
+        )
         let hiddenBarController = HiddenBarController(settings: settings)
         let controller = WMController(settings: settings, hiddenBarController: hiddenBarController)
         controller.applyPersistedSettings(settings)
         let cliManager = AppCLIManager()
-        let updateCoordinator = Self.updateCoordinatorFactoryForTests?(settings, controller, defaults)
-            ?? UpdateCoordinator(settings: settings, defaults: defaults)
+        let updateCoordinator = Self.updateCoordinatorFactoryForTests?(settings, controller, runtimeState)
+            ?? UpdateCoordinator(settings: settings, runtimeState: runtimeState)
         self.cliManager = cliManager
         self.updateCoordinator = updateCoordinator
 
@@ -79,7 +68,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings,
             controller: controller,
             hiddenBarController: hiddenBarController,
-            defaults: defaults,
             cliManager: cliManager,
             updateCoordinator: updateCoordinator
         )
@@ -98,6 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             self.statusBarController?.refreshMenu()
+        }
+        settings.onExternalSettingsReloaded = { [weak controller, weak self] in
+            guard let controller else { return }
+            controller.applyPersistedSettings(settings)
+            self?.statusBarController?.refreshMenu()
         }
         statusBarController?.setup()
         do {
@@ -132,98 +125,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopIPCServer() {
         ipcServer?.stop()
         ipcServer = nil
-    }
-
-    private func runStartupResetGate(storedEpoch: Int?, defaults: UserDefaults) {
-        while true {
-            switch presentStartupResetModal(storedEpoch: storedEpoch) {
-            case .exportBackup:
-                do {
-                    let backupURL = try SettingsMigration.exportRawBackup(defaults: defaults)
-                    presentInfoAlert(
-                        title: "Backup Saved",
-                        message: backupURL.path
-                    )
-                } catch {
-                    presentInfoAlert(
-                        title: "Backup Failed",
-                        message: error.localizedDescription
-                    )
-                }
-            case .reset:
-                SettingsMigration.resetOwnedSettings(defaults: defaults)
-                finishBootstrap(defaults: defaults)
-                return
-            case .quit:
-                NSApplication.shared.terminate(nil)
-                return
-            }
-        }
-    }
-
-    private func runDisplaysHaveSeparateSpacesGate() {
-        switch presentDisplaysHaveSeparateSpacesModal() {
-        case .openSystemSettings:
-            openDesktopAndDockSettings()
-            NSApplication.shared.terminate(nil)
-        case .quit:
-            NSApplication.shared.terminate(nil)
-        }
-    }
-
-    private func presentStartupResetModal(storedEpoch: Int?) -> StartupModalAction {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "OmniWM needs to reset stale settings"
-        if let storedEpoch {
-            alert.informativeText =
-                "This build expects settings epoch \(SettingsMigration.currentSettingsEpoch), but found epoch \(storedEpoch). " +
-                "You can export a raw backup, reset to defaults, or quit."
-        } else {
-            alert.informativeText =
-                "This build expects settings epoch \(SettingsMigration.currentSettingsEpoch), but found older persisted settings with no epoch marker. " +
-                "You can export a raw backup, reset to defaults, or quit."
-        }
-        alert.addButton(withTitle: "Export Backup")
-        alert.addButton(withTitle: "Reset to Defaults")
-        alert.addButton(withTitle: "Quit")
-
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return .exportBackup
-        case .alertSecondButtonReturn:
-            return .reset
-        default:
-            return .quit
-        }
-    }
-
-    private func presentDisplaysHaveSeparateSpacesModal() -> SeparateSpacesModalAction {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Turn off Displays have separate Spaces before launching OmniWM"
-        alert.informativeText =
-            "OmniWM requires shared Spaces across displays. Open System Settings > Desktop & Dock > Mission Control, " +
-            "turn off \"Displays have separate Spaces\", then log out of macOS and log back in before launching OmniWM again."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Quit")
-
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return .openSystemSettings
-        default:
-            return .quit
-        }
-    }
-
-    private func openDesktopAndDockSettings() {
-        if NSWorkspace.shared.open(Self.desktopAndDockSettingsURL) {
-            return
-        }
-
-        _ = NSWorkspace.shared.open(Self.systemSettingsAppURL)
     }
 
     private func presentInfoAlert(title: String, message: String) {

@@ -4,9 +4,6 @@ import Testing
 
 @testable import OmniWM
 
-private let updaterLastCheckedAtKey = "updater.lastCheckedAt"
-private let updaterSkippedReleaseTagKey = "updater.skippedReleaseTag"
-
 private func makeTestRelease(
     tagName: String = "v0.5.0",
     name: String = "OmniWM 0.5.0",
@@ -105,13 +102,14 @@ private final class TestUpdateWindowController: UpdateWindowControlling {
     @Test func automaticChecksRunByDefaultAndShowPopupForNewRelease() async {
         resetSharedControllerStateForTests()
         let defaults = makeLayoutPlanTestDefaults()
+        let runtimeState = runtimeStateStoreForTests(defaults: defaults)
         let settings = SettingsStore(defaults: defaults)
         let service = TestGitHubReleaseService(results: [.success(makeTestRelease())])
         let windowController = TestUpdateWindowController()
         var alerts: [(String, String)] = []
         let coordinator = UpdateCoordinator(
             settings: settings,
-            defaults: defaults,
+            runtimeState: runtimeState,
             releaseService: service,
             currentVersionProvider: { ReleaseVersion("0.4.4") },
             currentVersionStringProvider: { "0.4.4" },
@@ -135,12 +133,13 @@ private final class TestUpdateWindowController: UpdateWindowControlling {
     @Test func automaticChecksRespectDailyThrottle() async {
         resetSharedControllerStateForTests()
         let defaults = makeLayoutPlanTestDefaults()
-        defaults.set(Date(), forKey: updaterLastCheckedAtKey)
+        let runtimeState = runtimeStateStoreForTests(defaults: defaults)
+        runtimeState.updaterLastCheckedAt = Date()
         let settings = SettingsStore(defaults: defaults)
         let service = TestGitHubReleaseService(results: [.success(makeTestRelease())])
         let coordinator = UpdateCoordinator(
             settings: settings,
-            defaults: defaults,
+            runtimeState: runtimeState,
             releaseService: service,
             currentVersionProvider: { ReleaseVersion("0.4.4") },
             currentVersionStringProvider: { "0.4.4" },
@@ -160,12 +159,13 @@ private final class TestUpdateWindowController: UpdateWindowControlling {
     @Test func notNowSuppressesSameReleaseForLaterAutomaticChecks() async {
         resetSharedControllerStateForTests()
         let defaults = makeLayoutPlanTestDefaults()
+        let runtimeState = runtimeStateStoreForTests(defaults: defaults)
         let settings = SettingsStore(defaults: defaults)
         let firstService = TestGitHubReleaseService(results: [.success(makeTestRelease())])
         let firstWindowController = TestUpdateWindowController()
         let firstCoordinator = UpdateCoordinator(
             settings: settings,
-            defaults: defaults,
+            runtimeState: runtimeState,
             releaseService: firstService,
             currentVersionProvider: { ReleaseVersion("0.4.4") },
             currentVersionStringProvider: { "0.4.4" },
@@ -181,17 +181,17 @@ private final class TestUpdateWindowController: UpdateWindowControlling {
         firstWindowController.lastConfiguration?.notNow()
 
         let storedSuppression = await waitForUpdateCoordinatorTasks {
-            defaults.string(forKey: updaterSkippedReleaseTagKey) == "0.5"
+            runtimeState.updaterSkippedReleaseTag == "0.5"
         }
 
         #expect(storedSuppression)
-        defaults.set(Date(timeIntervalSinceNow: -90_000), forKey: updaterLastCheckedAtKey)
+        runtimeState.updaterLastCheckedAt = Date(timeIntervalSinceNow: -90_000)
 
         let secondService = TestGitHubReleaseService(results: [.success(makeTestRelease())])
         let secondWindowController = TestUpdateWindowController()
         let secondCoordinator = UpdateCoordinator(
             settings: settings,
-            defaults: defaults,
+            runtimeState: runtimeState,
             releaseService: secondService,
             currentVersionProvider: { ReleaseVersion("0.4.4") },
             currentVersionStringProvider: { "0.4.4" },
@@ -212,14 +212,15 @@ private final class TestUpdateWindowController: UpdateWindowControlling {
     @Test func manualChecksBypassThrottleAndDisabledAutomaticSetting() async {
         resetSharedControllerStateForTests()
         let defaults = makeLayoutPlanTestDefaults()
-        defaults.set(Date(), forKey: updaterLastCheckedAtKey)
+        let runtimeState = runtimeStateStoreForTests(defaults: defaults)
+        runtimeState.updaterLastCheckedAt = Date()
         let settings = SettingsStore(defaults: defaults)
         settings.updateChecksEnabled = false
         let service = TestGitHubReleaseService(results: [.success(makeTestRelease())])
         let windowController = TestUpdateWindowController()
         let coordinator = UpdateCoordinator(
             settings: settings,
-            defaults: defaults,
+            runtimeState: runtimeState,
             releaseService: service,
             currentVersionProvider: { ReleaseVersion("0.4.4") },
             currentVersionStringProvider: { "0.4.4" },
@@ -240,12 +241,13 @@ private final class TestUpdateWindowController: UpdateWindowControlling {
     @Test func manualChecksReportNetworkFailures() async {
         resetSharedControllerStateForTests()
         let defaults = makeLayoutPlanTestDefaults()
+        let runtimeState = runtimeStateStoreForTests(defaults: defaults)
         let settings = SettingsStore(defaults: defaults)
         let service = TestGitHubReleaseService(results: [.failure(TestUpdateError())])
         var alerts: [(String, String)] = []
         let coordinator = UpdateCoordinator(
             settings: settings,
-            defaults: defaults,
+            runtimeState: runtimeState,
             releaseService: service,
             currentVersionProvider: { ReleaseVersion("0.4.4") },
             currentVersionStringProvider: { "0.4.4" },
