@@ -6498,7 +6498,7 @@ private func makeCenteredCrossMonitorFixture(
             Issue.record("Expected visible seeding plan for visibility-transition test")
             return
         }
-        controller.layoutRefreshController.executeLayoutPlans(seededVisiblePlans)
+        await executeAndSettleLayoutPlans(seededVisiblePlans, on: controller)
 
         controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
             state.viewOffsetPixels = .static(0)
@@ -6513,7 +6513,7 @@ private func makeCenteredCrossMonitorFixture(
         }
 
         #expect(hasHideVisibilityChange(initialPlan.diff.visibilityChanges, token: transitioningToken, side: .right))
-        controller.layoutRefreshController.executeLayoutPlans(initialPlans)
+        await executeAndSettleLayoutPlans(initialPlans, on: controller)
 
         let stableHiddenPlans = try await controller.niriLayoutHandler.layoutWithNiriEngine(
             activeWorkspaces: [workspaceId]
@@ -6539,7 +6539,12 @@ private func makeCenteredCrossMonitorFixture(
 
         #expect(hasShowVisibilityChange(revealPlan.diff.visibilityChanges, token: transitioningToken))
         #expect(!hasHideVisibilityChange(revealPlan.diff.visibilityChanges, token: transitioningToken))
-        controller.layoutRefreshController.executeLayoutPlans(revealPlans)
+        await executeAndSettleLayoutPlans(revealPlans, on: controller)
+        controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
+            state.selectedNodeId = firstNode.id
+            state.activeColumnIndex = 0
+            state.viewOffsetPixels = .static(20)
+        }
 
         let stableVisiblePlans = try await controller.niriLayoutHandler.layoutWithNiriEngine(
             activeWorkspaces: [workspaceId]

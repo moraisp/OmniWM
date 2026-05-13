@@ -537,7 +537,7 @@ private func makeNiriOverviewLayout(
             return
         }
 
-        #expect((topFrame.height / bottomFrame.height).isApproximatelyEqual(to: 420.0 / 180.0, tolerance: 0.05))
+        #expect(abs((topFrame.height / bottomFrame.height) - (420.0 / 180.0)) <= 0.05)
     }
 
     @Test @MainActor func niriProjectionRebuildsFromMutatedWorkspaceAndEngineStateBeforeRelayout() {
@@ -645,7 +645,7 @@ private func makeNiriOverviewLayout(
         #expect(sourceFallbackFrame != nil)
         #expect(targetFocusedFrame != nil)
         #expect(targetMovedFrame != nil)
-        #expect((targetFocusedFrame!.height / targetMovedFrame!.height).isApproximatelyEqual(to: 540.0 / 240.0, tolerance: 0.05))
+        #expect(abs((targetFocusedFrame!.height / targetMovedFrame!.height) - (540.0 / 240.0)) <= 0.05)
     }
 }
 

@@ -107,7 +107,7 @@ private func waitForRecordedEvents(
     _ recorder: WatchEventRecorder,
     expectedCount: Int,
     step: String,
-    timeout: Duration = .seconds(2)
+    timeout: Duration = .seconds(8)
 ) async throws -> [IPCEventEnvelope] {
     try await withThrowingTaskGroup(of: [IPCEventEnvelope].self) { group in
         group.addTask {

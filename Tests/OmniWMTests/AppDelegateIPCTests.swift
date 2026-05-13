@@ -10,19 +10,51 @@ private func makeAppDelegateIPCTestSocketPath() -> String {
     "/tmp/owm-ad-\(UUID().uuidString.prefix(8)).sock"
 }
 
+private enum AppDelegateIPCTestError: Error {
+    case timedOut
+}
+
+private func withAppDelegateIPCTestTimeout<T: Sendable>(
+    _ timeout: Duration = .seconds(3),
+    onTimeout: @escaping @Sendable () -> Void = {},
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            onTimeout()
+            throw AppDelegateIPCTestError.timedOut
+        }
+
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
+    }
+}
+
 @MainActor
 private final class TestIPCServer: IPCServerLifecycle {
     private let onStart: @MainActor () -> Void
+    private let onStop: @MainActor () -> Void
 
-    init(onStart: @escaping @MainActor () -> Void) {
+    init(
+        onStart: @escaping @MainActor () -> Void = {},
+        onStop: @escaping @MainActor () -> Void = {}
+    ) {
         self.onStart = onStart
+        self.onStop = onStop
     }
 
     func start() throws {
         onStart()
     }
 
-    func stop() {}
+    func stop() {
+        onStop()
+    }
 }
 
 @MainActor
@@ -40,34 +72,16 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
     func checkForUpdatesManually() {}
 }
 
-@Suite @MainActor struct AppDelegateIPCTests {
-    @Test func finishBootstrapStartsIPCOnlyAfterStatusBarSetup() {
-        let defaults = makeLayoutPlanTestDefaults()
-        SettingsStore(defaults: defaults).ipcEnabled = true
-        var bootstrappedController: WMController?
-        var observedControllerStatusBar = false
-        var observedImagePosition: NSControl.ImagePosition?
-        AppDelegate.ipcServerFactoryForTests = { controller in
-            bootstrappedController = controller
-            return TestIPCServer {
-                observedControllerStatusBar = controller.statusBarController != nil
-                observedImagePosition = controller.statusBarController?.statusButtonImagePositionForTests()
-            }
-        }
-        defer {
-            AppDelegate.ipcServerFactoryForTests = nil
-            bootstrappedController?.statusBarController?.cleanup()
-        }
+@MainActor
+private func resetAppDelegateTestFactories() {
+    AppDelegate.ipcServerFactoryForTests = nil
+    AppDelegate.updateCoordinatorFactoryForTests = nil
+}
 
+@Suite(.serialized) @MainActor struct AppDelegateIPCTests {
+    @Test func setIPCDisabledDoesNotStartServer() throws {
+        let controller = makeLayoutPlanTestController()
         let appDelegate = AppDelegate()
-        appDelegate.finishBootstrap()
-
-        #expect(observedControllerStatusBar)
-        #expect(observedImagePosition != nil)
-    }
-
-    @Test func finishBootstrapLeavesIPCStoppedWhenDisabledByDefault() {
-        let defaults = makeLayoutPlanTestDefaults()
         var observedStart = false
         AppDelegate.ipcServerFactoryForTests = { _ in
             TestIPCServer {
@@ -75,19 +89,46 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
             }
         }
         defer {
-            AppDelegate.ipcServerFactoryForTests = nil
+            resetAppDelegateTestFactories()
         }
 
-        let appDelegate = AppDelegate()
-        appDelegate.finishBootstrap()
+        try appDelegate.setIPCEnabled(false, controller: controller)
 
         #expect(observedStart == false)
     }
 
+    @Test func setIPCEnabledStartsAndStopsInjectedServer() throws {
+        let controller = makeLayoutPlanTestController()
+        let appDelegate = AppDelegate()
+        var observedStart = false
+        var observedStop = false
+        AppDelegate.ipcServerFactoryForTests = { _ in
+            TestIPCServer(
+                onStart: {
+                    observedStart = true
+                },
+                onStop: {
+                    observedStop = true
+                }
+            )
+        }
+        defer {
+            resetAppDelegateTestFactories()
+        }
+
+        try appDelegate.setIPCEnabled(true, controller: controller)
+        try appDelegate.setIPCEnabled(false, controller: controller)
+
+        #expect(observedStart)
+        #expect(observedStop)
+    }
+
     @Test func finishBootstrapStartsUpdateChecksOnlyAfterStatusBarSetup() {
-        let defaults = makeLayoutPlanTestDefaults()
         var observedControllerStatusBar = false
         var bootstrappedController: WMController?
+        AppDelegate.ipcServerFactoryForTests = { _ in
+            TestIPCServer()
+        }
         AppDelegate.updateCoordinatorFactoryForTests = { _, controller, _ in
             bootstrappedController = controller
             return TestUpdateCoordinator {
@@ -95,7 +136,7 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
             }
         }
         defer {
-            AppDelegate.updateCoordinatorFactoryForTests = nil
+            resetAppDelegateTestFactories()
             bootstrappedController?.statusBarController?.cleanup()
         }
 
@@ -105,48 +146,57 @@ private final class TestUpdateCoordinator: AppUpdateCoordinating {
         #expect(observedControllerStatusBar)
     }
 
-    @Test func finishBootstrapMakesIPCReachableAndTerminateUnlinksSocket() async throws {
-        let defaults = makeLayoutPlanTestDefaults()
-        SettingsStore(defaults: defaults).ipcEnabled = true
+    @Test func startIPCServerMakesSocketReachableAndTerminateUnlinksSocket() async throws {
         let socketPath = makeAppDelegateIPCTestSocketPath()
-        var bootstrappedController: WMController?
+        let controller = makeLayoutPlanTestController()
+        let appDelegate = AppDelegate()
+        var didTerminate = false
         AppDelegate.ipcServerFactoryForTests = { controller in
-            bootstrappedController = controller
             return IPCServer(
                 controller: controller,
                 socketPath: socketPath,
-                sessionToken: "app-delegate-ipc-tests"
+                sessionToken: "app-delegate-ipc-tests",
+                authorizationToken: "app-delegate-ipc-tests"
             )
         }
         defer {
-            AppDelegate.ipcServerFactoryForTests = nil
-            bootstrappedController?.statusBarController?.cleanup()
+            if !didTerminate {
+                appDelegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+            }
+            resetAppDelegateTestFactories()
             try? FileManager.default.removeItem(atPath: socketPath)
+            try? FileManager.default.removeItem(atPath: IPCSocketPath.secretPath(forSocketPath: socketPath))
         }
 
-        let appDelegate = AppDelegate()
         #expect(!FileManager.default.fileExists(atPath: socketPath))
 
-        appDelegate.finishBootstrap()
+        try appDelegate.startIPCServer(controller: controller)
 
         #expect(FileManager.default.fileExists(atPath: socketPath))
 
-        let client = IPCClient(socketPath: socketPath)
+        let client = IPCClient(socketPath: socketPath, authorizationToken: "app-delegate-ipc-tests")
         let connection = try client.openConnection()
         defer {
-            Task {
-                await connection.close()
-            }
+            connection.interrupt()
         }
 
         try await connection.send(IPCRequest(id: "ping-after-bootstrap", kind: .ping))
-        let response = try await connection.readResponse()
+        let response = try await withAppDelegateIPCTestTimeout(
+            onTimeout: {
+                connection.interrupt()
+            },
+            operation: {
+                try await connection.readResponse()
+            }
+        )
 
         #expect(response.ok)
         #expect(response.kind == .ping)
         #expect(response.result?.kind == .pong)
 
+        await connection.close()
         appDelegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        didTerminate = true
 
         #expect(!FileManager.default.fileExists(atPath: socketPath))
     }

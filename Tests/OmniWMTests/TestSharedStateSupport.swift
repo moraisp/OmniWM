@@ -3,6 +3,90 @@ import Foundation
 
 @testable import OmniWM
 
+private actor AXFrameProviderIsolationForTests {
+    static let shared = AXFrameProviderIsolationForTests()
+
+    private var acquired = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !acquired {
+            acquired = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        guard !waiters.isEmpty else {
+            acquired = false
+            return
+        }
+
+        waiters.removeFirst().resume()
+    }
+}
+
+private actor CGSEventObserverIsolationForTests {
+    static let shared = CGSEventObserverIsolationForTests()
+
+    private var acquired = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !acquired {
+            acquired = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        guard !waiters.isEmpty else {
+            acquired = false
+            return
+        }
+
+        waiters.removeFirst().resume()
+    }
+}
+
+@MainActor
+func withAXFrameProviderIsolationForTests<T>(
+    _ operation: @MainActor () async throws -> T
+) async rethrows -> T {
+    await AXFrameProviderIsolationForTests.shared.acquire()
+    do {
+        let result = try await operation()
+        await AXFrameProviderIsolationForTests.shared.release()
+        return result
+    } catch {
+        await AXFrameProviderIsolationForTests.shared.release()
+        throw error
+    }
+}
+
+@MainActor
+func withCGSEventObserverIsolationForTests<T>(
+    _ operation: @MainActor () async throws -> T
+) async rethrows -> T {
+    await CGSEventObserverIsolationForTests.shared.acquire()
+    do {
+        let result = try await operation()
+        await CGSEventObserverIsolationForTests.shared.release()
+        return result
+    } catch {
+        await CGSEventObserverIsolationForTests.shared.release()
+        throw error
+    }
+}
+
 private let testConfigurationDirectoryKey = "__omniwm.test.configurationDirectory"
 
 func configurationDirectoryForTests(defaults: UserDefaults) -> URL {

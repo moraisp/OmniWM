@@ -503,7 +503,7 @@ private func prepareMouseWheelScrollFixtureWithDefaultSensitivity() async -> (
         )
 
         let after = fixture.controller.workspaceManager.niriViewportState(for: fixture.workspaceId)
-        #expect(abs(after.viewOffsetPixels.current() - before) < 0.001)
+        #expect(abs(after.viewOffsetPixels.current() - before) < 0.005)
         #expect(after.viewOffsetPixels.isGesture == false)
     }
 

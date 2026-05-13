@@ -470,13 +470,14 @@ private func prepareIPCNiriState(
         #expect(controller.settings.workspaceConfigurations.first?.layoutType == .defaultLayout)
     }
 
-    @Test func raiseAllFloatingWindowsReturnsNotFoundWithoutPlan() {
+    @Test func raiseAllFloatingWindowsReturnsIgnoredDisabledWhenControllerIsDisabled() {
         let controller = makeLayoutPlanTestController()
+        controller.isEnabled = false
         let router = makeIPCCommandRouter(for: controller)
 
         let result = router.handle(.raiseAllFloatingWindows)
 
-        #expect(result == .notFound)
+        #expect(result == .ignoredDisabled)
     }
 
     @Test func rescueOffscreenWindowsRoutesThroughControllerAndReturnsNotFoundWhenSettled() throws {

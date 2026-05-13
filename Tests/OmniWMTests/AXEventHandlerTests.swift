@@ -515,66 +515,68 @@ private func waitUntilAXEventTest(
     }
 
     @Test @MainActor func createdWindowRetriesWhenAXWindowRefIsInitiallyUnavailableWithoutRuleReevaluation() async {
-        let controller = makeAXEventTestController()
-        var relayoutReasons: [RefreshReason] = []
-        var axWindowRefReady = false
-        var axWindowRefLookupCount = 0
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeAXEventTestController()
+            var relayoutReasons: [RefreshReason] = []
+            var axWindowRefReady = false
+            var axWindowRefLookupCount = 0
 
-        controller.axEventHandler.windowInfoProvider = { windowId in
-            guard windowId == 817 else { return nil }
-            return WindowServerInfo(id: windowId, pid: getpid(), level: 0, frame: .zero)
-        }
-        controller.axEventHandler.axWindowRefProvider = { windowId, _ in
-            guard windowId == 817 else { return nil }
-            axWindowRefLookupCount += 1
-            guard axWindowRefReady else { return nil }
-            return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(windowId))
-        }
-        controller.axEventHandler.windowFactsProvider = { _, _ in
-            makeAXEventWindowRuleFacts(bundleId: "com.example.ax-retry")
-        }
-        controller.layoutRefreshController.resetDebugState()
-        controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
-            relayoutReasons.append(reason)
-            return true
-        }
-
-        controller.axEventHandler.cgsEventObserver(
-            CGSEventObserver.shared,
-            didReceive: .created(windowId: 817, spaceId: 0)
-        )
-        axWindowRefReady = true
-
-        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 817) == nil)
-
-        await waitUntilAXEventTest(iterations: 300) {
-            controller.workspaceManager.entry(forPid: getpid(), windowId: 817) != nil &&
-                relayoutReasons == [.axWindowCreated]
-        }
-
-        let trace = createFocusTraceEvents(on: controller)
-        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 817)?.mode == .tiling)
-        #expect(relayoutReasons == [.axWindowCreated])
-        #expect(controller.layoutRefreshController.debugCounters.executedByReason[.windowRuleReevaluation, default: 0] == 0)
-        #expect(axWindowRefLookupCount >= 2)
-        #expect(trace.contains { event in
-            if case .createSeen(windowId: 817) = event.kind {
+            controller.axEventHandler.windowInfoProvider = { windowId in
+                guard windowId == 817 else { return nil }
+                return WindowServerInfo(id: windowId, pid: getpid(), level: 0, frame: .zero)
+            }
+            controller.axEventHandler.axWindowRefProvider = { windowId, _ in
+                guard windowId == 817 else { return nil }
+                axWindowRefLookupCount += 1
+                guard axWindowRefReady else { return nil }
+                return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(windowId))
+            }
+            controller.axEventHandler.windowFactsProvider = { _, _ in
+                makeAXEventWindowRuleFacts(bundleId: "com.example.ax-retry")
+            }
+            controller.layoutRefreshController.resetDebugState()
+            controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
+                relayoutReasons.append(reason)
                 return true
             }
-            return false
-        })
-        #expect(trace.contains { event in
-            if case let .createRetryScheduled(windowId, pid, attempt) = event.kind {
-                return windowId == 817 && pid == getpid() && attempt == 1
+
+            controller.axEventHandler.cgsEventObserver(
+                CGSEventObserver.shared,
+                didReceive: .created(windowId: 817, spaceId: 0)
+            )
+            axWindowRefReady = true
+
+            #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 817) == nil)
+
+            await waitUntilAXEventTest(iterations: 300) {
+                controller.workspaceManager.entry(forPid: getpid(), windowId: 817) != nil &&
+                    relayoutReasons == [.axWindowCreated]
             }
-            return false
-        })
-        #expect(trace.contains { event in
-            if case let .candidateTracked(token, _) = event.kind {
-                return token == WindowToken(pid: getpid(), windowId: 817)
-            }
-            return false
-        })
+
+            let trace = createFocusTraceEvents(on: controller)
+            #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 817)?.mode == .tiling)
+            #expect(relayoutReasons == [.axWindowCreated])
+            #expect(controller.layoutRefreshController.debugCounters.executedByReason[.windowRuleReevaluation, default: 0] == 0)
+            #expect(axWindowRefLookupCount >= 2)
+            #expect(trace.contains { event in
+                if case .createSeen(windowId: 817) = event.kind {
+                    return true
+                }
+                return false
+            })
+            #expect(trace.contains { event in
+                if case let .createRetryScheduled(windowId, pid, attempt) = event.kind {
+                    return windowId == 817 && pid == getpid() && attempt == 1
+                }
+                return false
+            })
+            #expect(trace.contains { event in
+                if case let .candidateTracked(token, _) = event.kind {
+                    return token == WindowToken(pid: getpid(), windowId: 817)
+                }
+                return false
+            })
+        }
     }
 
     @Test @MainActor func malformedActivationPayloadFallsBackToNonManagedFocus() {
@@ -1572,6 +1574,11 @@ private func waitUntilAXEventTest(
         controller.layoutRefreshController.executeLayoutPlans(initialPlans)
         await controller.layoutRefreshController.waitForRefreshWorkForTests()
         controller.layoutRefreshController.layoutState.hasCompletedInitialRefresh = true
+        _ = controller.renderKeyboardFocusBorder(
+            for: controller.managedKeyboardFocusTarget(for: oldToken),
+            preferredFrame: controller.preferredKeyboardFocusFrame(for: oldToken),
+            policy: .direct
+        )
 
         let firstPendingToken = controller.workspaceManager.addWindow(
             AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 902),
@@ -1588,7 +1595,8 @@ private func waitUntilAXEventTest(
             activeWorkspaces: [workspaceId]
         )
         controller.layoutRefreshController.executeLayoutPlans(firstPlans)
-        await waitUntilAXEventTest(iterations: 300) {
+        controller.focusWindow(firstPendingToken)
+        await waitUntilAXEventTest(iterations: 1_000) {
             controller.workspaceManager.pendingFocusedToken == firstPendingToken &&
                 lastAppliedBorderWindowId(on: controller) == oldToken.windowId
         }
@@ -1643,6 +1651,11 @@ private func waitUntilAXEventTest(
         controller.layoutRefreshController.executeLayoutPlans(initialPlans)
         await controller.layoutRefreshController.waitForRefreshWorkForTests()
         controller.layoutRefreshController.layoutState.hasCompletedInitialRefresh = true
+        _ = controller.renderKeyboardFocusBorder(
+            for: controller.managedKeyboardFocusTarget(for: oldToken),
+            preferredFrame: controller.preferredKeyboardFocusFrame(for: oldToken),
+            policy: .direct
+        )
 
         controller.axEventHandler.focusedWindowRefProvider = { pid in
             guard pid == getpid() else { return nil }
@@ -1659,7 +1672,8 @@ private func waitUntilAXEventTest(
             activeWorkspaces: [workspaceId]
         )
         controller.layoutRefreshController.executeLayoutPlans(firstPlans)
-        await waitUntilAXEventTest(iterations: 300) {
+        controller.focusWindow(firstPendingToken)
+        await waitUntilAXEventTest(iterations: 1_000) {
             controller.workspaceManager.pendingFocusedToken == firstPendingToken
         }
 
@@ -1685,7 +1699,8 @@ private func waitUntilAXEventTest(
             activeWorkspaces: [workspaceId]
         )
         controller.layoutRefreshController.executeLayoutPlans(secondPlans)
-        await waitUntilAXEventTest(iterations: 300) {
+        controller.focusWindow(secondPendingToken)
+        await waitUntilAXEventTest(iterations: 1_000) {
             controller.workspaceManager.pendingFocusedToken == secondPendingToken
         }
 
@@ -2319,41 +2334,43 @@ private func waitUntilAXEventTest(
     }
 
     @Test @MainActor func frameChangedBurstCoalescesToSingleRelayout() async {
-        let controller = makeAXEventTestController()
-        guard let workspaceId = controller.activeWorkspace()?.id else {
-            Issue.record("Missing active workspace")
-            return
-        }
+        await withCGSEventObserverIsolationForTests {
+            let controller = makeAXEventTestController()
+            guard let workspaceId = controller.activeWorkspace()?.id else {
+                Issue.record("Missing active workspace")
+                return
+            }
 
-        _ = controller.workspaceManager.addWindow(
-            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 814),
-            pid: getpid(),
-            windowId: 814,
-            to: workspaceId
-        )
+            _ = controller.workspaceManager.addWindow(
+                AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 814),
+                pid: getpid(),
+                windowId: 814,
+                to: workspaceId
+            )
 
-        let observer = CGSEventObserver.shared
-        observer.resetDebugStateForTests()
-        observer.delegate = controller.axEventHandler
-        defer {
-            observer.delegate = nil
+            let observer = CGSEventObserver.shared
             observer.resetDebugStateForTests()
+            observer.delegate = controller.axEventHandler
+            defer {
+                observer.delegate = nil
+                observer.resetDebugStateForTests()
+            }
+
+            var relayoutReasons: [RefreshReason] = []
+            controller.layoutRefreshController.resetDebugState()
+            controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
+                relayoutReasons.append(reason)
+                return true
+            }
+
+            observer.enqueueEventForTests(.frameChanged(windowId: 814))
+            observer.enqueueEventForTests(.frameChanged(windowId: 814))
+            observer.flushPendingCGSEventsForTests()
+            await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+            #expect(relayoutReasons == [.axWindowChanged])
+            #expect(controller.axEventHandler.debugCounters.geometryRelayoutRequests == 1)
         }
-
-        var relayoutReasons: [RefreshReason] = []
-        controller.layoutRefreshController.resetDebugState()
-        controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
-            relayoutReasons.append(reason)
-            return true
-        }
-
-        observer.enqueueEventForTests(.frameChanged(windowId: 814))
-        observer.enqueueEventForTests(.frameChanged(windowId: 814))
-        observer.flushPendingCGSEventsForTests()
-        await controller.layoutRefreshController.waitForRefreshWorkForTests()
-
-        #expect(relayoutReasons == [.axWindowChanged])
-        #expect(controller.axEventHandler.debugCounters.geometryRelayoutRequests == 1)
     }
 
     @Test @MainActor func floatingFrameChangedUpdatesGeometryWithoutRelayout() async {
@@ -2406,57 +2423,59 @@ private func waitUntilAXEventTest(
     }
 
     @Test @MainActor func interactiveGestureSuppresssFrameChangedRelayoutButKeepsBorderPath() async {
-        let controller = makeAXEventTestController()
-        guard let workspaceId = controller.activeWorkspace()?.id else {
-            Issue.record("Missing active workspace")
-            return
-        }
+        await withCGSEventObserverIsolationForTests {
+            let controller = makeAXEventTestController()
+            guard let workspaceId = controller.activeWorkspace()?.id else {
+                Issue.record("Missing active workspace")
+                return
+            }
 
-        let handle = controller.workspaceManager.addWindow(
-            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 815),
-            pid: getpid(),
-            windowId: 815,
-            to: workspaceId
-        )
-        _ = controller.workspaceManager.setManagedFocus(
-            handle,
-            in: workspaceId,
-            onMonitor: controller.workspaceManager.monitorId(for: workspaceId)
-        )
+            let handle = controller.workspaceManager.addWindow(
+                AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 815),
+                pid: getpid(),
+                windowId: 815,
+                to: workspaceId
+            )
+            _ = controller.workspaceManager.setManagedFocus(
+                handle,
+                in: workspaceId,
+                onMonitor: controller.workspaceManager.monitorId(for: workspaceId)
+            )
 
-        controller.axEventHandler.frameProvider = { _ in
-            CGRect(x: 20, y: 20, width: 640, height: 480)
-        }
-        controller.setBordersEnabled(true)
-        controller.mouseEventHandler.state.isResizing = true
-        controller.axEventHandler.resetDebugStateForTests()
+            controller.axEventHandler.frameProvider = { _ in
+                CGRect(x: 20, y: 20, width: 640, height: 480)
+            }
+            controller.setBordersEnabled(true)
+            controller.mouseEventHandler.state.isResizing = true
+            controller.axEventHandler.resetDebugStateForTests()
 
-        let observer = CGSEventObserver.shared
-        observer.resetDebugStateForTests()
-        observer.delegate = controller.axEventHandler
-        defer {
-            observer.delegate = nil
+            let observer = CGSEventObserver.shared
             observer.resetDebugStateForTests()
-            controller.mouseEventHandler.state.isResizing = false
-            controller.axEventHandler.frameProvider = nil
+            observer.delegate = controller.axEventHandler
+            defer {
+                observer.delegate = nil
+                observer.resetDebugStateForTests()
+                controller.mouseEventHandler.state.isResizing = false
+                controller.axEventHandler.frameProvider = nil
+            }
+
+            var relayoutReasons: [RefreshReason] = []
+            controller.layoutRefreshController.resetDebugState()
+            controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
+                relayoutReasons.append(reason)
+                return true
+            }
+
+            observer.enqueueEventForTests(.frameChanged(windowId: 815))
+            observer.enqueueEventForTests(.frameChanged(windowId: 815))
+            observer.flushPendingCGSEventsForTests()
+            await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+            #expect(relayoutReasons.isEmpty)
+            #expect(controller.axEventHandler.debugCounters.geometryRelayoutRequests == 0)
+            #expect(controller.axEventHandler.debugCounters.geometryRelayoutsSuppressedDuringGesture == 1)
+            #expect(lastAppliedBorderWindowId(on: controller) == 815)
         }
-
-        var relayoutReasons: [RefreshReason] = []
-        controller.layoutRefreshController.resetDebugState()
-        controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
-            relayoutReasons.append(reason)
-            return true
-        }
-
-        observer.enqueueEventForTests(.frameChanged(windowId: 815))
-        observer.enqueueEventForTests(.frameChanged(windowId: 815))
-        observer.flushPendingCGSEventsForTests()
-        await controller.layoutRefreshController.waitForRefreshWorkForTests()
-
-        #expect(relayoutReasons.isEmpty)
-        #expect(controller.axEventHandler.debugCounters.geometryRelayoutRequests == 0)
-        #expect(controller.axEventHandler.debugCounters.geometryRelayoutsSuppressedDuringGesture == 1)
-        #expect(lastAppliedBorderWindowId(on: controller) == 815)
     }
 
     @Test @MainActor func committedViewportGestureSuppressesFrameChangedRelayout() {
