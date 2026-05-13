@@ -179,6 +179,50 @@ import Testing
         #expect(decoded.monitorDwindleSettings == export.monitorDwindleSettings)
     }
 
+    @Test func decodesUnknownMonitorOverrideEnumValuesAsNil() throws {
+        var export = SettingsExport.defaults()
+        export.monitorBarSettings = [
+            MonitorBarSettings(
+                monitorName: "Display A",
+                monitorDisplayId: 1,
+                position: .belowMenuBar,
+                windowLevel: .status
+            )
+        ]
+        export.monitorNiriSettings = [
+            MonitorNiriSettings(
+                monitorName: "Display B",
+                monitorDisplayId: 2,
+                centerFocusedColumn: .always,
+                singleWindowAspectRatio: .ratio16x9
+            )
+        ]
+        export.monitorDwindleSettings = [
+            MonitorDwindleSettings(
+                monitorName: "Display C",
+                monitorDisplayId: 3,
+                singleWindowAspectRatio: .ratio21x9
+            )
+        ]
+
+        let data = try SettingsTOMLCodec.encode(export)
+        let output = try #require(String(data: data, encoding: .utf8))
+        let edited = output
+            .replacingOccurrences(of: "position = \"belowMenuBar\"", with: "position = \"futurePosition\"")
+            .replacingOccurrences(of: "windowLevel = \"status\"", with: "windowLevel = \"futureLevel\"")
+            .replacingOccurrences(of: "centerFocusedColumn = \"always\"", with: "centerFocusedColumn = \"futureFocus\"")
+            .replacingOccurrences(of: "singleWindowAspectRatio = \"16:9\"", with: "singleWindowAspectRatio = \"futureNiriRatio\"")
+            .replacingOccurrences(of: "singleWindowAspectRatio = \"21:9\"", with: "singleWindowAspectRatio = \"futureDwindleRatio\"")
+
+        let decoded = try SettingsTOMLCodec.decode(Data(edited.utf8))
+
+        #expect(decoded.monitorBarSettings.first?.position == nil)
+        #expect(decoded.monitorBarSettings.first?.windowLevel == nil)
+        #expect(decoded.monitorNiriSettings.first?.centerFocusedColumn == nil)
+        #expect(decoded.monitorNiriSettings.first?.singleWindowAspectRatio == nil)
+        #expect(decoded.monitorDwindleSettings.first?.singleWindowAspectRatio == nil)
+    }
+
     @Test func roundTripsNestedColorQuartets() throws {
         var export = SettingsExport.defaults()
         export.borderColorRed = 0.1

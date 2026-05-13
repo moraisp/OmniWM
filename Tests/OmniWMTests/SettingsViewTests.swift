@@ -3,75 +3,66 @@ import Testing
 
 @testable import OmniWM
 
-private func makeSettingsWorkflowTestURL() -> URL {
+private func makeSettingsWorkflowTestDirectory() -> URL {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("omniwm-settings-workflow-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return directory.appendingPathComponent("settings-\(UUID().uuidString).json")
+    return directory
+}
+
+@MainActor
+private func makeSettingsWorkflowTestStore(directory: URL) -> SettingsStore {
+    SettingsStore(
+        persistence: SettingsFilePersistence(
+            directory: directory,
+            startWatching: false,
+            deferSaves: false
+        ),
+        runtimeState: RuntimeStateStore(
+            directory: directory,
+            deferSaves: false
+        )
+    )
 }
 
 @Suite(.serialized) @MainActor struct SettingsViewTests {
-    @Test func exportStatusMessagesMatchConfigWorkflowCopy() {
-        #expect(ExportStatus.exported(.full).message == "Editable config exported")
-        #expect(ExportStatus.exported(.compact).message == "Compact backup exported")
-        #expect(ExportStatus.imported.message == "Settings imported")
-        #expect(ExportStatus.created.message == "Settings file created")
-        #expect(ExportStatus.revealed.message == "Settings file revealed in Finder")
-        #expect(ExportStatus.opened.message == "Settings file opened")
+    @Test func settingsFileStatusMessagesMatchWorkflowCopy() {
+        #expect(SettingsFileStatus.revealed.message == "Settings file revealed in Finder")
+        #expect(SettingsFileStatus.opened.message == "Settings file opened")
     }
 
-    @Test func createActionWritesCanonicalSettingsFile() throws {
-        let controller = makeLayoutPlanTestController()
-        let settings = controller.settings
-        let exportURL = makeSettingsWorkflowTestURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-        try? FileManager.default.removeItem(at: exportURL)
-
-        let status = try ConfigFileWorkflow.perform(
-            .create,
-            targetURL: exportURL,
-            settings: settings,
-            controller: controller
-        )
-
-        #expect(status == .created)
-        #expect(FileManager.default.fileExists(atPath: exportURL.path) == true)
-    }
-
-    @Test func revealActionCreatesMissingFileAndReportsRevealed() throws {
-        let controller = makeLayoutPlanTestController()
-        let settings = controller.settings
-        let exportURL = makeSettingsWorkflowTestURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-        try? FileManager.default.removeItem(at: exportURL)
+    @Test func revealActionCreatesCanonicalTomlAndReportsRevealed() throws {
+        let directory = makeSettingsWorkflowTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = makeSettingsWorkflowTestStore(directory: directory)
+        let tomlURL = directory.appendingPathComponent("settings.toml", isDirectory: false)
+        try? FileManager.default.removeItem(at: tomlURL)
         var revealedURLs: [[URL]] = []
 
-        let status = try ConfigFileWorkflow.perform(
+        let status = try SettingsFileWorkflow.perform(
             .reveal,
-            targetURL: exportURL,
             settings: settings,
-            controller: controller,
             revealFile: { revealedURLs.append($0) }
         )
 
         #expect(status == .revealed)
-        #expect(FileManager.default.fileExists(atPath: exportURL.path) == true)
-        #expect(revealedURLs == [[exportURL]])
+        #expect(FileManager.default.fileExists(atPath: tomlURL.path) == true)
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)) == ["settings.toml"])
+        #expect(revealedURLs == [[tomlURL]])
     }
 
-    @Test func openActionUsesInjectedOpenHandler() throws {
-        let controller = makeLayoutPlanTestController()
-        let settings = controller.settings
-        let exportURL = makeSettingsWorkflowTestURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-        try? FileManager.default.removeItem(at: exportURL)
+    @Test func openActionUsesCanonicalTomlWithInjectedOpenHandler() throws {
+        let directory = makeSettingsWorkflowTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = makeSettingsWorkflowTestStore(directory: directory)
+        let tomlURL = directory.appendingPathComponent("settings.toml", isDirectory: false)
+        try? FileManager.default.removeItem(at: tomlURL)
         var openedURLs: [URL] = []
 
-        let status = try ConfigFileWorkflow.perform(
+        let status = try SettingsFileWorkflow.perform(
             .open,
-            targetURL: exportURL,
             settings: settings,
-            controller: controller,
             openFile: {
                 openedURLs.append($0)
                 return true
@@ -79,32 +70,47 @@ private func makeSettingsWorkflowTestURL() -> URL {
         )
 
         #expect(status == .opened)
-        #expect(FileManager.default.fileExists(atPath: exportURL.path) == true)
-        #expect(openedURLs == [exportURL])
+        #expect(FileManager.default.fileExists(atPath: tomlURL.path) == true)
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)) == ["settings.toml"])
+        #expect(openedURLs == [tomlURL])
     }
 
-    @Test func importActionMergesSettingsFileIntoControllerSettings() throws {
-        let exportURL = makeSettingsWorkflowTestURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
+    @Test func openActionDoesNotRewriteExistingToml() throws {
+        let directory = makeSettingsWorkflowTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = makeSettingsWorkflowTestStore(directory: directory)
+        let tomlURL = directory.appendingPathComponent("settings.toml", isDirectory: false)
+        let existingContents = """
+        # Preserve user edits, comments, and even temporarily invalid TOML.
+        not valid while user is editing =
+        """
+        try existingContents.write(to: tomlURL, atomically: true, encoding: .utf8)
 
-        let sourceController = makeLayoutPlanTestController()
-        sourceController.settings.focusFollowsWindowToMonitor = true
-        sourceController.settings.commandPaletteLastMode = .menu
-        try sourceController.settings.exportSettings(to: exportURL, mode: .full)
-
-        let targetController = makeLayoutPlanTestController()
-        targetController.settings.focusFollowsWindowToMonitor = false
-        targetController.settings.commandPaletteLastMode = .windows
-
-        let status = try ConfigFileWorkflow.perform(
-            .import,
-            targetURL: exportURL,
-            settings: targetController.settings,
-            controller: targetController
+        let status = try SettingsFileWorkflow.perform(
+            .open,
+            settings: settings,
+            openFile: { _ in true }
         )
 
-        #expect(status == .imported)
-        #expect(targetController.settings.focusFollowsWindowToMonitor == true)
-        #expect(targetController.settings.commandPaletteLastMode == .menu)
+        #expect(status == .opened)
+        #expect(try String(contentsOf: tomlURL, encoding: .utf8) == existingContents)
+    }
+
+    @Test func revealActionDoesNotRewriteExistingToml() throws {
+        let directory = makeSettingsWorkflowTestDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = makeSettingsWorkflowTestStore(directory: directory)
+        let tomlURL = directory.appendingPathComponent("settings.toml", isDirectory: false)
+        let existingContents = "# user comment\n[general]\n"
+        try existingContents.write(to: tomlURL, atomically: true, encoding: .utf8)
+
+        let status = try SettingsFileWorkflow.perform(
+            .reveal,
+            settings: settings,
+            revealFile: { _ in }
+        )
+
+        #expect(status == .revealed)
+        #expect(try String(contentsOf: tomlURL, encoding: .utf8) == existingContents)
     }
 }

@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -27,7 +26,6 @@ struct GeneralSettingsTab: View {
     @Bindable var settings: SettingsStore
     @Bindable var controller: WMController
     let updateCoordinator: (any AppUpdateCoordinating)?
-    @State private var exportStatus: ExportStatus?
 
     var body: some View {
         let animationsEnabled = Binding(
@@ -192,68 +190,6 @@ struct GeneralSettingsTab: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-
-            Section("Backup & Restore Config") {
-                HStack {
-                    Button("Export Editable Config") {
-                        performConfigFileAction(.export(.full))
-                    }
-
-                    Button("Export Compact Backup") {
-                        performConfigFileAction(.export(.compact))
-                    }
-
-                    Button("Import Settings") {
-                        performConfigFileAction(.import)
-                    }
-                    .disabled(!settings.settingsFileExists)
-                }
-
-                HStack {
-                    if !settings.settingsFileExists {
-                        Button("Create Backup File") {
-                            performConfigFileAction(.create)
-                        }
-                    }
-
-                    Button("Reveal Backup File") {
-                        performConfigFileAction(.reveal)
-                    }
-
-                    Button("Open Backup File") {
-                        performConfigFileAction(.open)
-                    }
-                }
-
-                Text(
-                    "Editable Config writes a JSON backup of every setting. Compact Backup "
-                        + "writes only settings that differ from defaults. Import merges either "
-                        + "file back into the running settings."
-                )
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                Text("~/.config/omniwm/settings.json")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textSelection(.enabled)
-
-                Divider()
-
-                Text("Canonical settings (live-reloaded from $EDITOR):")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                Text("~/.config/omniwm/settings.toml")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .textSelection(.enabled)
-
-                if let status = exportStatus {
-                    Label(status.message, systemImage: status.icon)
-                        .foregroundColor(status.color)
-                }
-            }
         }
         .formStyle(.grouped)
     }
@@ -265,18 +201,6 @@ struct GeneralSettingsTab: View {
             top: settings.outerGapTop,
             bottom: settings.outerGapBottom
         )
-    }
-
-    private func performConfigFileAction(_ action: ConfigFileAction) {
-        do {
-            exportStatus = try ConfigFileWorkflow.perform(
-                action,
-                settings: settings,
-                controller: controller
-            )
-        } catch {
-            exportStatus = .error(error.localizedDescription)
-        }
     }
 }
 

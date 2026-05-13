@@ -14,8 +14,7 @@ final class StatusBarMenuBuilder {
     private weak var controller: WMController?
     var infoAlertPresenter: (String, String) -> Void
     var confirmationAlertPresenter: (String, String, String, String) -> Bool
-    var configFileURL = SettingsStore.exportURL
-    var configFileActionPerformer: (ConfigFileAction, URL, SettingsStore, WMController) throws -> ExportStatus
+    var settingsFileActionPerformer: (SettingsFileAction, SettingsStore) throws -> SettingsFileStatus
     var ipcMenuEnabled = false
     var cliManager: AppCLIManager?
     var checkForUpdatesAction: (() -> Void)?
@@ -46,12 +45,10 @@ final class StatusBarMenuBuilder {
             NSApplication.shared.activate(ignoringOtherApps: true)
             return alert.runModal() == .alertFirstButtonReturn
         }
-        configFileActionPerformer = { action, targetURL, settings, controller in
-            try ConfigFileWorkflow.perform(
+        settingsFileActionPerformer = { action, settings in
+            try SettingsFileWorkflow.perform(
                 action,
-                targetURL: targetURL,
-                settings: settings,
-                controller: controller
+                settings: settings
             )
         }
     }
@@ -302,58 +299,25 @@ final class StatusBarMenuBuilder {
         settingsItem.view = settingsRow
         menu.addItem(settingsItem)
 
-        menu.addItem(createSectionLabel("CONFIG FILE"))
-
-        let exportEditableRow = MenuActionRowView(
-            icon: "square.and.arrow.up",
-            label: "Export Editable Config",
-            motionPolicy: motionPolicy
-        ) { [weak self] in
-            self?.performConfigFileAction(.export(.full))
-        }
-        let exportEditableItem = NSMenuItem()
-        exportEditableItem.view = exportEditableRow
-        menu.addItem(exportEditableItem)
-
-        let exportCompactRow = MenuActionRowView(
-            icon: "archivebox",
-            label: "Export Compact Backup",
-            motionPolicy: motionPolicy
-        ) { [weak self] in
-            self?.performConfigFileAction(.export(.compact))
-        }
-        let exportCompactItem = NSMenuItem()
-        exportCompactItem.view = exportCompactRow
-        menu.addItem(exportCompactItem)
-
-        let importSettingsRow = MenuActionRowView(
-            icon: "square.and.arrow.down",
-            label: "Import Settings",
-            motionPolicy: motionPolicy
-        ) { [weak self] in
-            self?.performConfigFileAction(.import)
-        }
-        let importSettingsItem = NSMenuItem()
-        importSettingsItem.view = importSettingsRow
-        menu.addItem(importSettingsItem)
+        menu.addItem(createSectionLabel("SETTINGS FILE"))
 
         let revealSettingsFileRow = MenuActionRowView(
             icon: "folder",
             label: "Reveal Settings File",
             motionPolicy: motionPolicy
         ) { [weak self] in
-            self?.performConfigFileAction(.reveal)
+            self?.performSettingsFileAction(.reveal)
         }
         let revealSettingsFileItem = NSMenuItem()
         revealSettingsFileItem.view = revealSettingsFileRow
         menu.addItem(revealSettingsFileItem)
 
         let openSettingsFileRow = MenuActionRowView(
-            icon: "doc.text",
-            label: "Open Settings File",
+            icon: "pencil",
+            label: "Edit Settings File",
             motionPolicy: motionPolicy
         ) { [weak self] in
-            self?.performConfigFileAction(.open)
+            self?.performSettingsFileAction(.open)
         }
         let openSettingsFileItem = NSMenuItem()
         openSettingsFileItem.view = openSettingsFileRow
@@ -364,25 +328,14 @@ final class StatusBarMenuBuilder {
         checkForUpdatesAction?()
     }
 
-    func performConfigFileAction(_ action: ConfigFileAction) {
+    func performSettingsFileAction(_ action: SettingsFileAction) {
         do {
-            guard let controller else {
-                throw CocoaError(.coderInvalidValue)
-            }
-            let status = try configFileActionPerformer(
+            _ = try settingsFileActionPerformer(
                 action,
-                configFileURL,
-                settings,
-                controller
+                settings
             )
-            if let title = status.successAlertTitle {
-                presentInfoAlert(title: title, message: configFileURL.path)
-            }
         } catch {
-            presentInfoAlert(
-                title: action.failureAlertTitle,
-                message: error.localizedDescription
-            )
+            NSLog("OmniWM settings file action failed: \(error.localizedDescription)")
         }
     }
 
@@ -994,6 +947,10 @@ final class MenuActionRowView: NSView {
                 self?.action()
             }
         }
+    }
+
+    func performActionForTests() {
+        action()
     }
 
     override func layout() {

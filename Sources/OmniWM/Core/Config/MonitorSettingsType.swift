@@ -2,8 +2,8 @@ import CoreGraphics
 import Foundation
 
 protocol MonitorSettingsType: Codable, Identifiable, Equatable {
-    var monitorName: String { get }
-    var monitorDisplayId: CGDirectDisplayID? { get }
+    var monitorName: String { get set }
+    var monitorDisplayId: CGDirectDisplayID? { get set }
 }
 
 enum MonitorSettingsStore {

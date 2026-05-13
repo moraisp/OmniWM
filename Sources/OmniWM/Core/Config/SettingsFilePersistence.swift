@@ -106,17 +106,21 @@ final class SettingsFilePersistence {
 
     func save(_ export: SettingsExport) {
         do {
-            try ensureDirectoryExists()
-            let data = try SettingsTOMLCodec.encode(export)
-            try data.write(to: fileURL, options: .atomic)
-
-            let fingerprint = currentFingerprint()
-            lastWrittenFingerprint = fingerprint
-            lastObservedFingerprint = fingerprint
-            refreshSettingsFileWatcher(for: fingerprint)
+            try saveImmediately(export)
         } catch {
             report("Failed to save \(fileURL.path): \(error.localizedDescription)")
         }
+    }
+
+    func saveImmediately(_ export: SettingsExport) throws {
+        try ensureDirectoryExists()
+        let data = try SettingsTOMLCodec.encode(export)
+        try data.write(to: fileURL, options: .atomic)
+
+        let fingerprint = currentFingerprint()
+        lastWrittenFingerprint = fingerprint
+        lastObservedFingerprint = fingerprint
+        refreshSettingsFileWatcher(for: fingerprint)
     }
 
     func scheduleSave(_ export: @autoclosure () -> SettingsExport) {

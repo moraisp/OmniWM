@@ -13,13 +13,6 @@ private func makeTestDefaults() -> UserDefaults {
     return UserDefaults(suiteName: suiteName)!
 }
 
-private func makeTestSettingsURL() -> URL {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("omniwm-settings-tests", isDirectory: true)
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return directory.appendingPathComponent("settings-\(UUID().uuidString).json")
-}
-
 private func makeSettingsTestMonitor(
     displayId: CGDirectDisplayID,
     name: String,
@@ -121,7 +114,7 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite struct MonitorSettingsStoreTests {
+struct MonitorSettingsStoreTests {
 
     @Test func getReturnsNilForUnknownMonitor() {
         let settings = [MonitorNiriSettings(monitorName: "Monitor A")]
@@ -201,7 +194,7 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite @MainActor struct PersistedWindowRestoreCatalogSettingsTests {
+@MainActor struct PersistedWindowRestoreCatalogSettingsTests {
     @Test func persistedRestoreCatalogRoundTripsThroughRuntimeStateStore() {
         let defaults = makeTestDefaults()
         let settings = SettingsStore(defaults: defaults)
@@ -211,192 +204,32 @@ private func atomicallyReplaceSettingsDataForTests(
 
         #expect(settings.loadPersistedWindowRestoreCatalog() == catalog)
 
-        // Verify the catalog is persisted in the runtime-state.json sidecar by
+        // Verify the catalog is persisted in the private runtime-state sidecar by
         // constructing a fresh RuntimeStateStore against the same temp directory.
-        // This proves the data path is the JSON sidecar (not UserDefaults).
+        // This proves the data path is private runtime state, not UserDefaults.
         settings.flushNow()
         let directory = configurationDirectoryForTests(defaults: defaults)
         let fresh = RuntimeStateStore(directory: directory)
         #expect(fresh.windowRestoreCatalog == catalog)
     }
 
-    @Test func persistedRestoreCatalogIsExcludedFromExportAndImport() throws {
+    @Test func persistedRestoreCatalogIsExcludedFromCanonicalSettingsFile() throws {
         let defaults = makeTestDefaults()
         let settings = SettingsStore(defaults: defaults)
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
 
         settings.hotkeysEnabled = false
         settings.savePersistedWindowRestoreCatalog(makePersistedRestoreCatalogFixture())
+        settings.flushNow()
 
-        try settings.exportSettings(to: exportURL, mode: .full)
-
-        let rawData = try Data(contentsOf: exportURL)
-        guard let json = try JSONSerialization.jsonObject(with: rawData) as? [String: Any] else {
-            Issue.record("Expected exported settings to be a JSON object")
-            return
-        }
-
-        #expect(json.keys.contains { $0.localizedCaseInsensitiveContains("restoreCatalog") } == false)
-
-        let imported = SettingsStore(defaults: makeTestDefaults())
-        try imported.importSettings(from: exportURL, monitors: [])
-        #expect(imported.loadPersistedWindowRestoreCatalog() == .empty)
+        let rawData = try Data(contentsOf: settings.settingsFileURL)
+        let rawText = try #require(String(data: rawData, encoding: .utf8))
+        let decoded = try SettingsTOMLCodec.decode(rawData)
+        #expect(decoded.hotkeysEnabled == false)
+        #expect(rawText.localizedCaseInsensitiveContains("restoreCatalog") == false)
     }
 }
 
-@Suite struct CodableBackwardCompatTests {
-
-    @Test func monitorNiriDecodesLegacyStringFields() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "monitorName": "Test",
-            "centerFocusedColumn": "always",
-            "singleWindowAspectRatio": "4:3"
-        }
-        """
-        let decoded = try JSONDecoder().decode(MonitorNiriSettings.self, from: Data(json.utf8))
-        #expect(decoded.centerFocusedColumn == .always)
-        #expect(decoded.singleWindowAspectRatio == .ratio4x3)
-    }
-
-    @Test func monitorNiriDecodesUnknownEnumAsNil() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "monitorName": "Test",
-            "centerFocusedColumn": "futureValue",
-            "singleWindowAspectRatio": "99:1"
-        }
-        """
-        let decoded = try JSONDecoder().decode(MonitorNiriSettings.self, from: Data(json.utf8))
-        #expect(decoded.centerFocusedColumn == nil)
-        #expect(decoded.singleWindowAspectRatio == nil)
-    }
-
-    @Test func monitorBarDecodesUnknownPositionAsNil() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "monitorName": "Test",
-            "position": "unknownPosition",
-            "windowLevel": "unknownLevel"
-        }
-        """
-        let decoded = try JSONDecoder().decode(MonitorBarSettings.self, from: Data(json.utf8))
-        #expect(decoded.position == nil)
-        #expect(decoded.windowLevel == nil)
-    }
-
-    @Test func monitorDwindleDecodesUnknownRatioAsNil() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "monitorName": "Test",
-            "singleWindowAspectRatio": "unknownRatio"
-        }
-        """
-        let decoded = try JSONDecoder().decode(MonitorDwindleSettings.self, from: Data(json.utf8))
-        #expect(decoded.singleWindowAspectRatio == nil)
-    }
-
-    @Test func monitorNiriEncodeDecodeRoundTrip() throws {
-        let original = MonitorNiriSettings(
-            monitorName: "Roundtrip",
-            maxVisibleColumns: 4,
-            maxWindowsPerColumn: 2,
-            centerFocusedColumn: .onOverflow,
-            alwaysCenterSingleColumn: false,
-            singleWindowAspectRatio: .ratio16x9,
-            infiniteLoop: true
-        )
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(MonitorNiriSettings.self, from: data)
-        #expect(decoded == original)
-    }
-
-    @Test func monitorBarEncodeDecodeRoundTrip() throws {
-        let original = MonitorBarSettings(
-            monitorName: "Roundtrip",
-            enabled: true,
-            showLabels: false,
-            showFloatingWindows: true,
-            reserveLayoutSpace: true,
-            position: .belowMenuBar,
-            windowLevel: .status,
-            height: 30
-        )
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(MonitorBarSettings.self, from: data)
-        #expect(decoded == original)
-    }
-
-    @Test func monitorDwindleEncodeDecodeRoundTrip() throws {
-        let original = MonitorDwindleSettings(
-            monitorName: "Roundtrip",
-            smartSplit: true,
-            singleWindowAspectRatio: .ratio21x9,
-            useGlobalGaps: false,
-            innerGap: 10
-        )
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(MonitorDwindleSettings.self, from: data)
-        #expect(decoded == original)
-    }
-
-    @Test func appRuleDecodesLegacyAlwaysFloatWithoutNewFields() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000031",
-            "bundleId": "com.example.legacy",
-            "alwaysFloat": true
-        }
-        """
-
-        let decoded = try JSONDecoder().decode(AppRule.self, from: Data(json.utf8))
-
-        #expect(decoded.bundleId == "com.example.legacy")
-        #expect(decoded.alwaysFloat == true)
-        #expect(decoded.manage == nil)
-        #expect(decoded.layout == nil)
-        #expect(decoded.effectiveLayoutAction == .float)
-    }
-
-    @Test func appRuleDecodesLegacyIgnoreRuleAsFloating() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000032",
-            "bundleId": "com.example.advanced",
-            "appNameSubstring": "Example",
-            "titleSubstring": "Chooser",
-            "titleRegex": "^Chooser$",
-            "axRole": "AXWindow",
-            "axSubrole": "AXStandardWindow",
-            "manage": "off",
-            "assignToWorkspace": "2",
-            "minWidth": 800,
-            "minHeight": 600
-        }
-        """
-
-        let decoded = try JSONDecoder().decode(AppRule.self, from: Data(json.utf8))
-
-        #expect(decoded.bundleId == "com.example.advanced")
-        #expect(decoded.appNameSubstring == "Example")
-        #expect(decoded.titleSubstring == "Chooser")
-        #expect(decoded.titleRegex == "^Chooser$")
-        #expect(decoded.axRole == kAXWindowRole as String)
-        #expect(decoded.axSubrole == kAXStandardWindowSubrole as String)
-        #expect(decoded.manage == nil)
-        #expect(decoded.layout == .float)
-        #expect(decoded.assignToWorkspace == "2")
-        #expect(decoded.minWidth == 800)
-        #expect(decoded.minHeight == 600)
-    }
-}
-
-@Suite struct SettingsExportTests {
+struct SettingsExportTests {
 
     @Test func defaultsReflectPromotedBuiltInValues() {
         let defaults = SettingsExport.defaults()
@@ -443,223 +276,9 @@ private func atomicallyReplaceSettingsDataForTests(
         #expect(defaults.quakeTerminalCustomFrame == nil)
         #expect(defaults.appearanceMode == AppearanceMode.dark.rawValue)
     }
-
-    @Test func settingsExportDecodesUnknownEnumStrings() throws {
-        let json = """
-        {
-            "hotkeysEnabled": true,
-            "focusFollowsMouse": false,
-            "moveMouseToFocusedWindow": false,
-            "focusFollowsWindowToMonitor": false,
-            "mouseWarpMonitorOrder": [],
-            "mouseWarpAxis": "futureAxis",
-            "mouseWarpMargin": 2,
-            "gapSize": 8,
-            "outerGapLeft": 0,
-            "outerGapRight": 0,
-            "outerGapTop": 0,
-            "outerGapBottom": 0,
-            "niriMaxWindowsPerColumn": 3,
-            "niriMaxVisibleColumns": 2,
-            "niriInfiniteLoop": false,
-            "niriCenterFocusedColumn": "futureUnknownValue",
-            "niriAlwaysCenterSingleColumn": true,
-            "niriSingleWindowAspectRatio": "futureRatio",
-            "workspaceConfigurations": [],
-            "defaultLayoutType": "futureLayout",
-            "bordersEnabled": false,
-            "borderWidth": 4,
-            "borderColorRed": 0,
-            "borderColorGreen": 0.5,
-            "borderColorBlue": 1,
-            "borderColorAlpha": 1,
-            "hotkeyBindings": [],
-            "workspaceBarEnabled": false,
-            "workspaceBarShowLabels": true,
-            "workspaceBarShowFloatingWindows": false,
-            "workspaceBarWindowLevel": "futureLevel",
-            "workspaceBarPosition": "futurePosition",
-            "workspaceBarNotchAware": false,
-            "workspaceBarDeduplicateAppIcons": false,
-            "workspaceBarHideEmptyWorkspaces": false,
-            "workspaceBarReserveLayoutSpace": false,
-            "workspaceBarHeight": 24,
-            "workspaceBarBackgroundOpacity": 0.1,
-            "workspaceBarXOffset": 0,
-            "workspaceBarYOffset": 0,
-            "workspaceBarAccentColorRed": 0,
-            "workspaceBarAccentColorGreen": 0.5,
-            "workspaceBarAccentColorBlue": 1,
-            "workspaceBarAccentColorAlpha": 1,
-            "workspaceBarTextColorRed": 1,
-            "workspaceBarTextColorGreen": 1,
-            "workspaceBarTextColorBlue": 1,
-            "workspaceBarTextColorAlpha": 1,
-            "workspaceBarLabelFontSize": 12,
-            "monitorBarSettings": [],
-            "appRules": [],
-            "monitorOrientationSettings": [],
-            "monitorNiriSettings": [],
-            "dwindleSmartSplit": false,
-            "dwindleDefaultSplitRatio": 1,
-            "dwindleSplitWidthMultiplier": 1,
-            "dwindleSingleWindowAspectRatio": "futureRatio",
-            "dwindleUseGlobalGaps": true,
-            "dwindleMoveToRootStable": true,
-            "monitorDwindleSettings": [],
-            "preventSleepEnabled": false,
-            "updateChecksEnabled": true,
-            "ipcEnabled": true,
-            "scrollGestureEnabled": true,
-            "scrollSensitivity": 1,
-            "scrollModifierKey": "futureModifier",
-            "gestureFingerCount": 99,
-            "gestureInvertDirection": true,
-            "statusBarShowWorkspaceName": true,
-            "statusBarShowAppNames": true,
-            "statusBarUseWorkspaceId": true,
-            "commandPaletteLastMode": "futurePaletteMode",
-            "animationsEnabled": true,
-            "hiddenBarIsCollapsed": false,
-            "quakeTerminalEnabled": false,
-            "quakeTerminalPosition": "futurePosition",
-            "quakeTerminalWidthPercent": 75,
-            "quakeTerminalHeightPercent": 50,
-            "quakeTerminalAnimationDuration": 0.4,
-            "quakeTerminalAutoHide": true,
-            "quakeTerminalOpacity": 0.8,
-            "quakeTerminalMonitorMode": "futureMonitorMode",
-            "quakeTerminalUseCustomFrame": false,
-            "appearanceMode": "futureMode",
-            "capabilityOverrides": []
-        }
-        """
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: Data(json.utf8))
-        #expect(decoded.mouseWarpAxis == "futureAxis")
-        #expect(decoded.niriCenterFocusedColumn == "futureUnknownValue")
-        #expect(decoded.workspaceBarPosition == "futurePosition")
-        #expect(decoded.scrollModifierKey == "futureModifier")
-        #expect(decoded.commandPaletteLastMode == "futurePaletteMode")
-        #expect(decoded.quakeTerminalPosition == "futurePosition")
-        #expect(decoded.quakeTerminalMonitorMode == "futureMonitorMode")
-    }
-
-    @Test func encodeDecodeRoundTrip() throws {
-        let export = SettingsExport(
-            hotkeysEnabled: true,
-            focusFollowsMouse: true,
-            moveMouseToFocusedWindow: true,
-            focusFollowsWindowToMonitor: true,
-            mouseWarpMonitorOrder: ["Monitor1", "Monitor2"],
-            mouseWarpAxis: MouseWarpAxis.vertical.rawValue,
-            mouseWarpMargin: 5,
-            gapSize: 12.0,
-            outerGapLeft: 2.0,
-            outerGapRight: 3.0,
-            outerGapTop: 4.0,
-            outerGapBottom: 5.0,
-            niriMaxWindowsPerColumn: 4,
-            niriMaxVisibleColumns: 3,
-            niriInfiniteLoop: true,
-            niriCenterFocusedColumn: "always",
-            niriAlwaysCenterSingleColumn: true,
-            niriSingleWindowAspectRatio: "16:9",
-            niriColumnWidthPresets: [0.85, 0.5, 0.85, 1.0],
-            niriDefaultColumnWidth: 0.6,
-            workspaceConfigurations: [],
-            defaultLayoutType: "niri",
-            bordersEnabled: true,
-            borderWidth: 3.0,
-            borderColorRed: 0.2,
-            borderColorGreen: 0.4,
-            borderColorBlue: 0.8,
-            borderColorAlpha: 0.9,
-            hotkeyBindings: [],
-            workspaceBarEnabled: true,
-            workspaceBarShowLabels: false,
-            workspaceBarShowFloatingWindows: true,
-            workspaceBarWindowLevel: "status",
-            workspaceBarPosition: "belowMenuBar",
-            workspaceBarNotchAware: true,
-            workspaceBarDeduplicateAppIcons: true,
-            workspaceBarHideEmptyWorkspaces: true,
-            workspaceBarReserveLayoutSpace: true,
-            workspaceBarHeight: 30.0,
-            workspaceBarBackgroundOpacity: 0.5,
-            workspaceBarXOffset: 10.0,
-            workspaceBarYOffset: 20.0,
-            workspaceBarAccentColorRed: 0.10,
-            workspaceBarAccentColorGreen: 0.20,
-            workspaceBarAccentColorBlue: 0.30,
-            workspaceBarAccentColorAlpha: 0.40,
-            workspaceBarTextColorRed: 0.15,
-            workspaceBarTextColorGreen: 0.25,
-            workspaceBarTextColorBlue: 0.35,
-            workspaceBarTextColorAlpha: 0.45,
-            workspaceBarLabelFontSize: 14,
-            monitorBarSettings: [MonitorBarSettings(monitorName: "TestBar", enabled: true, reserveLayoutSpace: true)],
-            appRules: [],
-            monitorOrientationSettings: [],
-            monitorNiriSettings: [MonitorNiriSettings(monitorName: "TestNiri", maxVisibleColumns: 3)],
-            dwindleSmartSplit: true,
-            dwindleDefaultSplitRatio: 0.6,
-            dwindleSplitWidthMultiplier: 1.5,
-            dwindleSingleWindowAspectRatio: "21:9",
-            dwindleUseGlobalGaps: false,
-            dwindleMoveToRootStable: false,
-            monitorDwindleSettings: [MonitorDwindleSettings(monitorName: "TestDwindle", smartSplit: true)],
-            preventSleepEnabled: true,
-            updateChecksEnabled: false,
-            ipcEnabled: true,
-            scrollGestureEnabled: false,
-            scrollSensitivity: 2.0,
-            scrollModifierKey: "option",
-            gestureFingerCount: 4,
-            gestureInvertDirection: true,
-            statusBarShowWorkspaceName: true,
-            statusBarShowAppNames: true,
-            statusBarUseWorkspaceId: true,
-            commandPaletteLastMode: "menu",
-            animationsEnabled: false,
-            hiddenBarIsCollapsed: true,
-            quakeTerminalEnabled: true,
-            quakeTerminalPosition: "bottom",
-            quakeTerminalWidthPercent: 80,
-            quakeTerminalHeightPercent: 55,
-            quakeTerminalAnimationDuration: 0.4,
-            quakeTerminalAutoHide: false,
-            quakeTerminalOpacity: 0.85,
-            quakeTerminalMonitorMode: "focusedWindow",
-            quakeTerminalUseCustomFrame: true,
-            quakeTerminalCustomFrame: QuakeTerminalFrameExport(x: 10, y: 20, width: 1200, height: 700),
-            appearanceMode: "dark"
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        let data1 = try encoder.encode(export)
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: data1)
-        let data2 = try encoder.encode(decoded)
-        #expect(data1 == data2)
-    }
-
-    @Test func fullExportByDefaultIncludesCanonicalHotkeyBindings() throws {
-        let data = try SettingsExport.defaults().exportData()
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected full export to produce a JSON object")
-            return
-        }
-
-        guard let hotkeyBindings = json["hotkeyBindings"] as? [[String: Any]] else {
-            Issue.record("Expected default export to include full hotkey bindings")
-            return
-        }
-
-        #expect(hotkeyBindings.count == HotkeyBindingRegistry.defaults().count)
-        #expect(hotkeyBindings.allSatisfy { $0["binding"] != nil && $0["bindings"] == nil })
-    }
 }
 
-@Suite @MainActor struct NiriColumnWidthPresetPersistenceTests {
+@MainActor struct NiriColumnWidthPresetPersistenceTests {
     @Test func validatedPresetsPreserveOrderAndDuplicatesWhileClamping() {
         let presets = SettingsStore.validatedPresets([0.85, 0.02, 0.85, 1.2])
 
@@ -702,260 +321,7 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite struct CompactSettingsExportTests {
-    @Test func compactExportOmitsDefaultAnimationsKeyAndDefaultHotkeys() throws {
-        var export = SettingsExport.defaults()
-        export.hiddenBarIsCollapsed = false
-
-        let data = try export.exportData(mode: .compact)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected compact export to produce a JSON object")
-            return
-        }
-
-        #expect(json["animationsEnabled"] == nil)
-        #expect((json["hiddenBarIsCollapsed"] as? Bool) == false)
-        #expect(json["hotkeyBindings"] == nil)
-    }
-
-    @Test func compactExportIncludesAnimationsKeyWhenDisabled() throws {
-        var export = SettingsExport.defaults()
-        export.animationsEnabled = false
-
-        let data = try export.exportData(mode: .compact)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected compact export to produce a JSON object")
-            return
-        }
-
-        #expect((json["animationsEnabled"] as? Bool) == false)
-    }
-
-    @Test func fullExportIncludesAutoDefaultColumnWidthAsNull() throws {
-        var export = SettingsExport.defaults()
-        export.niriDefaultColumnWidth = nil
-
-        let data = try export.exportData(mode: .full)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected full export to produce a JSON object")
-            return
-        }
-
-        #expect(json["niriDefaultColumnWidth"] is NSNull)
-
-        let mergedData = try SettingsExport.mergedImportData(from: data)
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
-        #expect(decoded.niriDefaultColumnWidth == nil)
-    }
-
-    @Test func compactExportIncludesAutoDefaultColumnWidthAsNull() throws {
-        var export = SettingsExport.defaults()
-        export.niriDefaultColumnWidth = nil
-
-        let data = try export.exportData(mode: .compact)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected compact export to produce a JSON object")
-            return
-        }
-
-        #expect(json["niriDefaultColumnWidth"] is NSNull)
-
-        let mergedData = try SettingsExport.mergedImportData(from: data)
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
-        #expect(decoded.niriDefaultColumnWidth == nil)
-    }
-
-    @Test func compactExportIncludesReadableAdditionalPersistedSettings() throws {
-        var export = SettingsExport.defaults()
-        export.focusFollowsWindowToMonitor = true
-        export.updateChecksEnabled = false
-        export.commandPaletteLastMode = CommandPaletteMode.menu.rawValue
-        export.quakeTerminalPosition = QuakeTerminalPosition.bottom.rawValue
-        export.quakeTerminalWidthPercent = 80
-        export.quakeTerminalHeightPercent = 55
-        export.quakeTerminalAnimationDuration = 0.4
-        export.quakeTerminalAutoHide = true
-        export.quakeTerminalUseCustomFrame = true
-        export.quakeTerminalCustomFrame = QuakeTerminalFrameExport(x: 10, y: 20, width: 1200, height: 700)
-
-        let data = try export.exportData(mode: .compact)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected compact export to produce a JSON object")
-            return
-        }
-
-        #expect((json["focusFollowsWindowToMonitor"] as? Bool) == true)
-        #expect((json["updateChecksEnabled"] as? Bool) == false)
-        #expect(json["commandPaletteLastMode"] as? String == "menu")
-        #expect(json["quakeTerminalEnabled"] == nil)
-        #expect(json["quakeTerminalPosition"] as? String == "bottom")
-        #expect((json["quakeTerminalWidthPercent"] as? NSNumber)?.doubleValue == 80)
-        #expect((json["quakeTerminalHeightPercent"] as? NSNumber)?.doubleValue == 55)
-        #expect((json["quakeTerminalAnimationDuration"] as? NSNumber)?.doubleValue == 0.4)
-        #expect((json["quakeTerminalAutoHide"] as? Bool) == true)
-        #expect((json["quakeTerminalUseCustomFrame"] as? Bool) == true)
-        #expect(json["quakeTerminalCustomFrameX"] == nil)
-        #expect(json["quakeTerminalCustomFrameY"] == nil)
-        #expect(json["quakeTerminalCustomFrameWidth"] == nil)
-        #expect(json["quakeTerminalCustomFrameHeight"] == nil)
-
-        guard let frame = json["quakeTerminalCustomFrame"] as? [String: Any] else {
-            Issue.record("Expected compact export to include a readable quakeTerminalCustomFrame object")
-            return
-        }
-        #expect((frame["x"] as? NSNumber)?.doubleValue == 10)
-        #expect((frame["y"] as? NSNumber)?.doubleValue == 20)
-        #expect((frame["width"] as? NSNumber)?.doubleValue == 1200)
-        #expect((frame["height"] as? NSNumber)?.doubleValue == 700)
-    }
-
-    @Test func compactExportOmitsPromotedWorkspaceAndRuleDefaults() throws {
-        let data = try SettingsExport.defaults().exportData(mode: .compact)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected compact export to produce a JSON object")
-            return
-        }
-
-        #expect(json["workspaceConfigurations"] == nil)
-        #expect(json["appRules"] == nil)
-        #expect(json["mouseWarpMonitorOrder"] == nil)
-        #expect(json["quakeTerminalUseCustomFrame"] == nil)
-        #expect(json["preventSleepEnabled"] == nil)
-        #expect(json["updateChecksEnabled"] == nil)
-        #expect(json["ipcEnabled"] == nil)
-    }
-
-    @Test func fullExportOmitsRemovedMenuAnywhereKeys() throws {
-        let export = SettingsExport.defaults()
-        let data = try export.exportData(mode: .full)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected full export to produce a JSON object")
-            return
-        }
-
-        #expect(json["menuAnywhereNativeEnabled"] == nil)
-        #expect(json["menuAnywherePaletteEnabled"] == nil)
-        #expect(json["menuAnywherePosition"] == nil)
-        #expect(json["menuAnywhereShowShortcuts"] == nil)
-    }
-
-    @Test func mergedImportDataPreservesUnchangedHotkeysById() throws {
-        let defaults = SettingsExport.defaults()
-        guard defaults.hotkeyBindings.count >= 2 else {
-            Issue.record("Expected at least two default hotkey bindings")
-            return
-        }
-
-        var changed = defaults
-        let updatedBinding = KeyBinding(
-            keyCode: UInt32(kVK_ANSI_K),
-            modifiers: UInt32(controlKey) | UInt32(optionKey)
-        )
-        changed.hotkeyBindings[0].binding = updatedBinding
-
-        let rawData = try changed.exportData(mode: .compact, defaults: defaults)
-        let mergedData = try SettingsExport.mergedImportData(from: rawData, defaults: defaults)
-        let merged = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
-
-        #expect(merged.hotkeyBindings[0].binding == changed.hotkeyBindings[0].binding)
-        #expect(merged.hotkeyBindings[1].binding == defaults.hotkeyBindings[1].binding)
-    }
-
-    @Test func animationsEnabledKeyIsHonoredOnImportAndPreservedOnReexport() throws {
-        let rawData = Data(
-            """
-            {
-              "animationsEnabled": false,
-              "hiddenBarIsCollapsed": true
-            }
-            """.utf8
-        )
-
-        let mergedData = try SettingsExport.mergedImportData(from: rawData)
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
-        #expect(decoded.animationsEnabled == false)
-        #expect(decoded.hiddenBarIsCollapsed == true)
-
-        let reexported = try decoded.exportData(mode: .full)
-        guard let json = try JSONSerialization.jsonObject(with: reexported) as? [String: Any] else {
-            Issue.record("Expected re-export to produce a JSON object")
-            return
-        }
-
-        #expect((json["animationsEnabled"] as? Bool) == false)
-        #expect((json["hiddenBarIsCollapsed"] as? Bool) == true)
-    }
-
-    @Test func sameEpochLegacyWorkspaceKeysAreIgnoredOnImportAndDroppedOnReexport() throws {
-        var export = SettingsExport.defaults()
-        export.workspaceConfigurations = [
-            WorkspaceConfiguration(name: "1", monitorAssignment: .main)
-        ]
-
-        let encoded = try SettingsExport.makeEncoder().encode(export)
-        guard var json = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
-            Issue.record("Expected encoded settings export to produce a JSON object")
-            return
-        }
-
-        json["persistentWorkspacesRaw"] = "ws1,ws2"
-        json["workspaceAssignmentsRaw"] = "ws1=Studio Display"
-
-        let rawData = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
-        let mergedData = try SettingsExport.mergedImportData(from: rawData)
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
-
-        #expect(decoded.workspaceConfigurations == export.workspaceConfigurations)
-
-        let reexported = try decoded.exportData(mode: .full)
-        guard let reexportedJSON = try JSONSerialization.jsonObject(with: reexported) as? [String: Any] else {
-            Issue.record("Expected re-export to produce a JSON object")
-            return
-        }
-
-        #expect(reexportedJSON["persistentWorkspacesRaw"] == nil)
-        #expect(reexportedJSON["workspaceAssignmentsRaw"] == nil)
-    }
-
-    @Test func mergedImportDataBackfillsNewPersistedSettingsWithDefaults() throws {
-        let rawData = Data(
-            """
-            {
-              "hiddenBarIsCollapsed": true
-            }
-            """.utf8
-        )
-
-        let mergedData = try SettingsExport.mergedImportData(from: rawData)
-        let decoded = try JSONDecoder().decode(SettingsExport.self, from: mergedData)
-
-        #expect(decoded.hiddenBarIsCollapsed == true)
-        #expect(decoded.mouseWarpAxis == MouseWarpAxis.horizontal.rawValue)
-        #expect(decoded.focusFollowsWindowToMonitor == false)
-        #expect(decoded.commandPaletteLastMode == CommandPaletteMode.windows.rawValue)
-        #expect(decoded.animationsEnabled == true)
-        #expect(decoded.workspaceBarEnabled == true)
-        #expect(decoded.workspaceBarShowFloatingWindows == false)
-        #expect(decoded.workspaceBarNotchAware == true)
-        #expect(decoded.workspaceBarReserveLayoutSpace == false)
-        #expect(decoded.workspaceConfigurations == BuiltInSettingsDefaults.workspaceConfigurations)
-        #expect(decoded.appRules == BuiltInSettingsDefaults.appRules)
-        #expect(decoded.preventSleepEnabled == false)
-        #expect(decoded.updateChecksEnabled == true)
-        #expect(decoded.ipcEnabled == false)
-        #expect(decoded.hotkeyBindings == HotkeyBindingRegistry.defaults())
-        #expect(decoded.quakeTerminalEnabled == true)
-        #expect(decoded.quakeTerminalPosition == QuakeTerminalPosition.center.rawValue)
-        #expect(decoded.quakeTerminalWidthPercent == 50.0)
-        #expect(decoded.quakeTerminalHeightPercent == 50.0)
-        #expect(decoded.quakeTerminalAnimationDuration == 0.2)
-        #expect(decoded.quakeTerminalAutoHide == false)
-        #expect(decoded.quakeTerminalUseCustomFrame == false)
-        #expect(decoded.quakeTerminalCustomFrame == nil)
-    }
-}
-
-@Suite @MainActor struct WorkspaceBarSettingsResolutionTests {
+@MainActor struct WorkspaceBarSettingsResolutionTests {
     @Test func monitorOverrideCanEnableReservedLayoutSpaceIndependently() {
         let settings = SettingsStore(defaults: makeTestDefaults())
         let monitor = makeLayoutPlanTestMonitor(name: "Reservation Test")
@@ -989,18 +355,16 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite struct KeyBindingCodecTests {
+struct KeyBindingCodecTests {
     @Test func humanReadableBindingsRoundTripAsStrings() throws {
         let binding = KeyBinding(
             keyCode: UInt32(kVK_ANSI_K),
             modifiers: UInt32(controlKey) | UInt32(optionKey)
         )
 
-        let data = try JSONEncoder().encode(binding)
-        let decodedJSON = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        let output = try encodeSingleHotkeyBinding(binding)
 
-        #expect(decodedJSON as? String == "Control+Option+K")
-        #expect(try JSONDecoder().decode(KeyBinding.self, from: data) == binding)
+        #expect(output.contains("binding = \"Control+Option+K\""))
     }
 
     @Test func keypadBindingsUseReadableStringsAndDistinctCompactBadges() throws {
@@ -1009,13 +373,11 @@ private func atomicallyReplaceSettingsDataForTests(
             modifiers: UInt32(controlKey) | UInt32(optionKey) | UInt32(cmdKey)
         )
 
-        let data = try JSONEncoder().encode(binding)
-        let decodedJSON = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        let output = try encodeSingleHotkeyBinding(binding)
 
         #expect(binding.displayString == "⌃⌥⌘KP1")
         #expect(binding.humanReadableString == "Control+Option+Command+Keypad 1")
-        #expect(decodedJSON as? String == "Control+Option+Command+Keypad 1")
-        #expect(try JSONDecoder().decode(KeyBinding.self, from: data) == binding)
+        #expect(output.contains("binding = \"Control+Option+Command+Keypad 1\""))
     }
 
     @Test func keypadActionKeysUseCanonicalReadableNames() {
@@ -1032,15 +394,10 @@ private func atomicallyReplaceSettingsDataForTests(
     @Test func unknownKeyCodesFallBackToLegacyNumericEncoding() throws {
         let binding = KeyBinding(keyCode: 200, modifiers: UInt32(controlKey))
 
-        let data = try JSONEncoder().encode(binding)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected unknown key binding to encode as an object")
-            return
-        }
+        let output = try encodeSingleHotkeyBinding(binding)
 
-        #expect((json["keyCode"] as? NSNumber)?.uint32Value == 200)
-        #expect((json["modifiers"] as? NSNumber)?.uint32Value == UInt32(controlKey))
-        #expect(try JSONDecoder().decode(KeyBinding.self, from: data) == binding)
+        #expect(output.contains("keyCode = 200"))
+        #expect(output.contains("modifiers = \(UInt32(controlKey))"))
     }
 
     @Test func keypadDigitsRemainDistinctFromTopRowDigits() {
@@ -1054,9 +411,21 @@ private func atomicallyReplaceSettingsDataForTests(
         #expect(topRow.humanReadableString == "Control+Option+Command+1")
         #expect(keypad.humanReadableString == "Control+Option+Command+Keypad 1")
     }
+
+    private func encodeSingleHotkeyBinding(_ binding: KeyBinding) throws -> String {
+        var export = SettingsExport.defaults()
+        let hotkey = try #require(HotkeyBindingRegistry.makeBinding(id: "openCommandPalette", binding: binding))
+        export.hotkeyBindings = [hotkey]
+
+        let data = try SettingsTOMLCodec.encode(export)
+        let decoded = try SettingsTOMLCodec.decode(data)
+        #expect(decoded.hotkeyBindings == [hotkey])
+
+        return try #require(String(data: data, encoding: .utf8))
+    }
 }
 
-@Suite struct HotkeySurfaceTests {
+struct HotkeySurfaceTests {
     @Test func moveIsTheOnlyDirectionalWindowCommandFamily() {
         let ids = Set(HotkeyBindingRegistry.defaults().map(\.id))
 
@@ -1110,20 +479,20 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 
     @Test func hotkeyBindingEncodesWithoutSerializedCommand() throws {
+        var export = SettingsExport.defaults()
         let binding = HotkeyBinding(id: "move.left", command: .move(.left), binding: .unassigned)
-        let data = try JSONEncoder().encode(binding)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            Issue.record("Expected hotkey binding to encode as an object")
-            return
-        }
+        export.hotkeyBindings = [binding]
+        let output = try #require(String(data: SettingsTOMLCodec.encode(export), encoding: .utf8))
+        let decoded = try SettingsTOMLCodec.decode(Data(output.utf8))
 
-        #expect(json["id"] as? String == "move.left")
-        #expect(json["command"] == nil)
-        #expect(json["binding"] as? String == "Unassigned")
+        #expect(output.contains("id = \"move.left\""))
+        #expect(output.contains("binding = \"Unassigned\""))
+        #expect(output.contains("command = ") == false)
+        #expect(decoded.hotkeyBindings == [binding])
     }
 }
 
-@Suite @MainActor struct CommandPaletteSettingsTests {
+@MainActor struct CommandPaletteSettingsTests {
     @Test func commandPaletteLastModeDefaultsToWindowsAndPersists() {
         let defaults = makeTestDefaults()
 
@@ -1145,12 +514,10 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite @MainActor struct SettingsStoreFileRoundTripTests {
-    @Test func exportAndImportRoundTripNewlyCoveredPersistedState() throws {
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
-        let settings = SettingsStore(defaults: makeTestDefaults())
+@MainActor struct SettingsStoreFileRoundTripTests {
+    @Test func tomlSettingsFileRoundTripsNewlyCoveredPersistedState() {
+        let defaults = makeTestDefaults()
+        let settings = SettingsStore(defaults: defaults)
         settings.focusFollowsWindowToMonitor = true
         settings.mouseWarpAxis = .vertical
         settings.updateChecksEnabled = false
@@ -1168,40 +535,35 @@ private func atomicallyReplaceSettingsDataForTests(
         settings.quakeTerminalMonitorMode = .focusedWindow
         settings.quakeTerminalUseCustomFrame = true
         settings.quakeTerminalCustomFrame = CGRect(x: 10, y: 20, width: 1200, height: 700)
+        settings.flushNow()
 
-        try settings.exportSettings(to: exportURL, mode: .full)
+        let reloaded = SettingsStore(defaults: defaults)
 
-        let imported = SettingsStore(defaults: makeTestDefaults())
-        try imported.importSettings(from: exportURL)
-
-        #expect(imported.focusFollowsWindowToMonitor == true)
-        #expect(imported.mouseWarpAxis == .vertical)
-        #expect(imported.updateChecksEnabled == false)
-        #expect(imported.statusBarShowWorkspaceName == true)
-        #expect(imported.statusBarShowAppNames == true)
-        #expect(imported.statusBarUseWorkspaceId == true)
-        #expect(imported.commandPaletteLastMode == .menu)
-        #expect(imported.quakeTerminalEnabled == true)
-        #expect(imported.quakeTerminalPosition == .bottom)
-        #expect(imported.quakeTerminalWidthPercent == 80)
-        #expect(imported.quakeTerminalHeightPercent == 55)
-        #expect(imported.quakeTerminalAnimationDuration == 0.4)
-        #expect(imported.quakeTerminalAutoHide == false)
-        #expect(imported.quakeTerminalOpacity == 0.75)
-        #expect(imported.quakeTerminalMonitorMode == .focusedWindow)
-        #expect(imported.quakeTerminalUseCustomFrame == true)
-        #expect(imported.quakeTerminalCustomFrame == CGRect(x: 10, y: 20, width: 1200, height: 700))
+        #expect(reloaded.focusFollowsWindowToMonitor == true)
+        #expect(reloaded.mouseWarpAxis == .vertical)
+        #expect(reloaded.updateChecksEnabled == false)
+        #expect(reloaded.statusBarShowWorkspaceName == true)
+        #expect(reloaded.statusBarShowAppNames == true)
+        #expect(reloaded.statusBarUseWorkspaceId == true)
+        #expect(reloaded.commandPaletteLastMode == .menu)
+        #expect(reloaded.quakeTerminalEnabled == true)
+        #expect(reloaded.quakeTerminalPosition == .bottom)
+        #expect(reloaded.quakeTerminalWidthPercent == 80)
+        #expect(reloaded.quakeTerminalHeightPercent == 55)
+        #expect(reloaded.quakeTerminalAnimationDuration == 0.4)
+        #expect(reloaded.quakeTerminalAutoHide == false)
+        #expect(reloaded.quakeTerminalOpacity == 0.75)
+        #expect(reloaded.quakeTerminalMonitorMode == .focusedWindow)
+        #expect(reloaded.quakeTerminalUseCustomFrame == true)
+        #expect(reloaded.quakeTerminalCustomFrame == CGRect(x: 10, y: 20, width: 1200, height: 700))
     }
 
-    @Test func fullExportAndImportRoundTripMonitorOverridesAndAppRules() throws {
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
-        let settings = SettingsStore(defaults: makeTestDefaults())
+    @Test func tomlSettingsFileRoundTripsMonitorOverridesAndAppRules() {
+        let defaults = makeTestDefaults()
+        let settings = SettingsStore(defaults: defaults)
         let barOverride = MonitorBarSettings(
             id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             monitorName: "Studio Display",
-            monitorDisplayId: 101,
             enabled: false,
             showLabels: false,
             showFloatingWindows: true,
@@ -1219,7 +581,6 @@ private func atomicallyReplaceSettingsDataForTests(
         let niriOverride = MonitorNiriSettings(
             id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
             monitorName: "Studio Display",
-            monitorDisplayId: 101,
             maxVisibleColumns: 4,
             maxWindowsPerColumn: 2,
             centerFocusedColumn: .always,
@@ -1230,7 +591,6 @@ private func atomicallyReplaceSettingsDataForTests(
         let dwindleOverride = MonitorDwindleSettings(
             id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
             monitorName: "Studio Display",
-            monitorDisplayId: 101,
             smartSplit: true,
             defaultSplitRatio: 0.62,
             splitWidthMultiplier: 1.4,
@@ -1260,271 +620,133 @@ private func atomicallyReplaceSettingsDataForTests(
         settings.monitorNiriSettings = [niriOverride]
         settings.monitorDwindleSettings = [dwindleOverride]
         settings.appRules = BuiltInSettingsDefaults.appRules + [customRule]
+        settings.flushNow()
 
-        try settings.exportSettings(to: exportURL, mode: .full)
-
-        let imported = SettingsStore(defaults: makeTestDefaults())
-        let reboundMonitor = makeSettingsTestMonitor(displayId: 501, name: "Studio Display")
-        try imported.importSettings(from: exportURL, monitors: [reboundMonitor])
-
-        var expectedBarOverride = barOverride
-        expectedBarOverride.monitorDisplayId = reboundMonitor.displayId
-        var expectedNiriOverride = niriOverride
-        expectedNiriOverride.monitorDisplayId = reboundMonitor.displayId
-        var expectedDwindleOverride = dwindleOverride
-        expectedDwindleOverride.monitorDisplayId = reboundMonitor.displayId
-
-        #expect(imported.monitorBarSettings == [expectedBarOverride])
-        #expect(imported.monitorNiriSettings == [expectedNiriOverride])
-        #expect(imported.monitorDwindleSettings == [expectedDwindleOverride])
-        #expect(imported.appRules == BuiltInSettingsDefaults.appRules + [customRule])
+        let reloaded = SettingsStore(defaults: defaults)
+        #expect(reloaded.monitorBarSettings == [barOverride])
+        #expect(reloaded.monitorNiriSettings == [niriOverride])
+        #expect(reloaded.monitorDwindleSettings == [dwindleOverride])
+        #expect(reloaded.appRules == BuiltInSettingsDefaults.appRules + [customRule])
     }
 
-    @Test func compactExportImportAndReexportPreservesMonitorOverridesAndCustomAppRules() throws {
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
-        let settings = SettingsStore(defaults: makeTestDefaults())
-        let barOverride = MonitorBarSettings(
-            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
-            monitorName: "LG UltraFine",
-            monitorDisplayId: 202,
-            showFloatingWindows: true,
-            reserveLayoutSpace: true,
-            backgroundOpacity: 0.42
-        )
-        let niriOverride = MonitorNiriSettings(
-            id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
-            monitorName: "LG UltraFine",
-            monitorDisplayId: 202,
-            maxVisibleColumns: 5,
-            infiniteLoop: true
-        )
-        let dwindleOverride = MonitorDwindleSettings(
-            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
-            monitorName: "LG UltraFine",
-            monitorDisplayId: 202,
-            useGlobalGaps: false,
-            innerGap: 4,
-            outerGapLeft: 11
-        )
-        let customRule = AppRule(
-            id: UUID(uuidString: "88888888-8888-8888-8888-888888888888")!,
-            bundleId: "com.example.Terminal",
-            titleSubstring: "Prod",
-            layout: .tile,
-            assignToWorkspace: "2",
-            minWidth: 700,
-            minHeight: 500
-        )
-
-        settings.monitorBarSettings = [barOverride]
-        settings.monitorNiriSettings = [niriOverride]
-        settings.monitorDwindleSettings = [dwindleOverride]
-        settings.appRules = BuiltInSettingsDefaults.appRules + [customRule]
-
-        try settings.exportSettings(to: exportURL, mode: .compact)
-
-        let imported = SettingsStore(defaults: makeTestDefaults())
-        let reboundMonitor = makeSettingsTestMonitor(displayId: 909, name: "LG UltraFine")
-        try imported.importSettings(from: exportURL, monitors: [reboundMonitor])
-
-        var expectedBarOverride = barOverride
-        expectedBarOverride.monitorDisplayId = reboundMonitor.displayId
-        var expectedNiriOverride = niriOverride
-        expectedNiriOverride.monitorDisplayId = reboundMonitor.displayId
-        var expectedDwindleOverride = dwindleOverride
-        expectedDwindleOverride.monitorDisplayId = reboundMonitor.displayId
-
-        #expect(imported.monitorBarSettings == [expectedBarOverride])
-        #expect(imported.monitorNiriSettings == [expectedNiriOverride])
-        #expect(imported.monitorDwindleSettings == [expectedDwindleOverride])
-        #expect(imported.appRules == BuiltInSettingsDefaults.appRules + [customRule])
-
-        let reexported = try SettingsExport(
-            hotkeysEnabled: imported.hotkeysEnabled,
-            focusFollowsMouse: imported.focusFollowsMouse,
-            moveMouseToFocusedWindow: imported.moveMouseToFocusedWindow,
-            focusFollowsWindowToMonitor: imported.focusFollowsWindowToMonitor,
-            mouseWarpMonitorOrder: imported.mouseWarpMonitorOrder,
-            mouseWarpAxis: imported.mouseWarpAxis.rawValue,
-            mouseWarpMargin: imported.mouseWarpMargin,
-            gapSize: imported.gapSize,
-            outerGapLeft: imported.outerGapLeft,
-            outerGapRight: imported.outerGapRight,
-            outerGapTop: imported.outerGapTop,
-            outerGapBottom: imported.outerGapBottom,
-            niriMaxWindowsPerColumn: imported.niriMaxWindowsPerColumn,
-            niriMaxVisibleColumns: imported.niriMaxVisibleColumns,
-            niriInfiniteLoop: imported.niriInfiniteLoop,
-            niriCenterFocusedColumn: imported.niriCenterFocusedColumn.rawValue,
-            niriAlwaysCenterSingleColumn: imported.niriAlwaysCenterSingleColumn,
-            niriSingleWindowAspectRatio: imported.niriSingleWindowAspectRatio.rawValue,
-            niriColumnWidthPresets: imported.niriColumnWidthPresets,
-            niriDefaultColumnWidth: imported.niriDefaultColumnWidth,
-            workspaceConfigurations: imported.workspaceConfigurations,
-            defaultLayoutType: imported.defaultLayoutType.rawValue,
-            bordersEnabled: imported.bordersEnabled,
-            borderWidth: imported.borderWidth,
-            borderColorRed: imported.borderColorRed,
-            borderColorGreen: imported.borderColorGreen,
-            borderColorBlue: imported.borderColorBlue,
-            borderColorAlpha: imported.borderColorAlpha,
-            hotkeyBindings: imported.hotkeyBindings,
-            workspaceBarEnabled: imported.workspaceBarEnabled,
-            workspaceBarShowLabels: imported.workspaceBarShowLabels,
-            workspaceBarShowFloatingWindows: imported.workspaceBarShowFloatingWindows,
-            workspaceBarWindowLevel: imported.workspaceBarWindowLevel.rawValue,
-            workspaceBarPosition: imported.workspaceBarPosition.rawValue,
-            workspaceBarNotchAware: imported.workspaceBarNotchAware,
-            workspaceBarDeduplicateAppIcons: imported.workspaceBarDeduplicateAppIcons,
-            workspaceBarHideEmptyWorkspaces: imported.workspaceBarHideEmptyWorkspaces,
-            workspaceBarReserveLayoutSpace: imported.workspaceBarReserveLayoutSpace,
-            workspaceBarHeight: imported.workspaceBarHeight,
-            workspaceBarBackgroundOpacity: imported.workspaceBarBackgroundOpacity,
-            workspaceBarXOffset: imported.workspaceBarXOffset,
-            workspaceBarYOffset: imported.workspaceBarYOffset,
-            workspaceBarAccentColorRed: -1,
-            workspaceBarAccentColorGreen: -1,
-            workspaceBarAccentColorBlue: -1,
-            workspaceBarAccentColorAlpha: 1,
-            workspaceBarTextColorRed: -1,
-            workspaceBarTextColorGreen: -1,
-            workspaceBarTextColorBlue: -1,
-            workspaceBarTextColorAlpha: 1,
-            workspaceBarLabelFontSize: 12,
-            monitorBarSettings: imported.monitorBarSettings,
-            appRules: imported.appRules,
-            monitorOrientationSettings: imported.monitorOrientationSettings,
-            monitorNiriSettings: imported.monitorNiriSettings,
-            dwindleSmartSplit: imported.dwindleSmartSplit,
-            dwindleDefaultSplitRatio: imported.dwindleDefaultSplitRatio,
-            dwindleSplitWidthMultiplier: imported.dwindleSplitWidthMultiplier,
-            dwindleSingleWindowAspectRatio: imported.dwindleSingleWindowAspectRatio.rawValue,
-            dwindleUseGlobalGaps: imported.dwindleUseGlobalGaps,
-            dwindleMoveToRootStable: imported.dwindleMoveToRootStable,
-            monitorDwindleSettings: imported.monitorDwindleSettings,
-            preventSleepEnabled: imported.preventSleepEnabled,
-            updateChecksEnabled: imported.updateChecksEnabled,
-            ipcEnabled: imported.ipcEnabled,
-            scrollGestureEnabled: imported.scrollGestureEnabled,
-            scrollSensitivity: imported.scrollSensitivity,
-            scrollModifierKey: imported.scrollModifierKey.rawValue,
-            gestureFingerCount: imported.gestureFingerCount.rawValue,
-            gestureInvertDirection: imported.gestureInvertDirection,
-            statusBarShowWorkspaceName: imported.statusBarShowWorkspaceName,
-            statusBarShowAppNames: imported.statusBarShowAppNames,
-            statusBarUseWorkspaceId: imported.statusBarUseWorkspaceId,
-            commandPaletteLastMode: imported.commandPaletteLastMode.rawValue,
-            animationsEnabled: imported.animationsEnabled,
-            hiddenBarIsCollapsed: imported.hiddenBarIsCollapsed,
-            quakeTerminalEnabled: imported.quakeTerminalEnabled,
-            quakeTerminalPosition: imported.quakeTerminalPosition.rawValue,
-            quakeTerminalWidthPercent: imported.quakeTerminalWidthPercent,
-            quakeTerminalHeightPercent: imported.quakeTerminalHeightPercent,
-            quakeTerminalAnimationDuration: imported.quakeTerminalAnimationDuration,
-            quakeTerminalAutoHide: imported.quakeTerminalAutoHide,
-            quakeTerminalOpacity: imported.quakeTerminalOpacity,
-            quakeTerminalMonitorMode: imported.quakeTerminalMonitorMode.rawValue,
-            quakeTerminalUseCustomFrame: imported.quakeTerminalUseCustomFrame,
-            quakeTerminalCustomFrame: imported.quakeTerminalCustomFrame.map(QuakeTerminalFrameExport.init(frame:)),
-            appearanceMode: imported.appearanceMode.rawValue
-        ).exportData(mode: .compact)
-
-        guard let json = try JSONSerialization.jsonObject(with: reexported) as? [String: Any] else {
-            Issue.record("Expected compact re-export to produce a JSON object")
-            return
-        }
-
-        #expect((json["monitorBarSettings"] as? [[String: Any]])?.count == 1)
-        #expect((json["monitorNiriSettings"] as? [[String: Any]])?.count == 1)
-        #expect((json["monitorDwindleSettings"] as? [[String: Any]])?.count == 1)
-        #expect((json["appRules"] as? [[String: Any]])?.count == BuiltInSettingsDefaults.appRules.count + 1)
-    }
-
-    @Test func importNormalizesWorkspaceConfigurationsAndRebindsSpecificDisplayAssignments() throws {
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
-        let settings = SettingsStore(defaults: makeTestDefaults())
+    @Test func tomlLoadNormalizesWorkspaceConfigurations() {
+        let defaults = makeTestDefaults()
+        let settings = SettingsStore(defaults: defaults)
+        let output = OutputId(displayId: 10, name: "Studio Display")
         settings.workspaceConfigurations = [
             WorkspaceConfiguration(
                 name: "2",
                 displayName: "Code",
-                monitorAssignment: .specificDisplay(OutputId(displayId: 10, name: "Studio Display")),
+                monitorAssignment: .specificDisplay(output),
                 layoutType: .dwindle
             ),
             WorkspaceConfiguration(name: "10", monitorAssignment: .main),
             WorkspaceConfiguration(name: "2", displayName: "Duplicate", monitorAssignment: .secondary)
         ]
+        settings.flushNow()
 
-        try settings.exportSettings(to: exportURL, mode: .full)
+        let reloaded = SettingsStore(defaults: defaults)
 
-        let imported = SettingsStore(defaults: makeTestDefaults())
-        let reboundMonitor = makeSettingsTestMonitor(displayId: 77, name: "Studio Display")
-        try imported.importSettings(from: exportURL, monitors: [reboundMonitor])
-
-        #expect(imported.workspaceConfigurations.map(\.name) == ["2", "10"])
-        #expect(imported.workspaceConfigurations.first?.displayName == "Code")
-        #expect(
-            imported.workspaceConfigurations.first?.monitorAssignment
-                == .specificDisplay(OutputId(displayId: reboundMonitor.displayId, name: reboundMonitor.name))
-        )
-        #expect(imported.workspaceConfigurations.last?.monitorAssignment == .main)
+        #expect(reloaded.workspaceConfigurations.map(\.name) == ["2", "10"])
+        #expect(reloaded.workspaceConfigurations.first?.displayName == "Code")
+        #expect(reloaded.workspaceConfigurations.first?.monitorAssignment == .specificDisplay(output))
+        #expect(reloaded.workspaceConfigurations.last?.monitorAssignment == .main)
     }
 
-    @Test func importClearsStaleMonitorDisplayIdsWhenNoCurrentMatchExists() throws {
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
+    @Test func tomlApplyRebindsMonitorOverridesByUniqueNameWhenDisplayIdChanges() {
         let settings = SettingsStore(defaults: makeTestDefaults())
-        settings.monitorBarSettings = [
-            MonitorBarSettings(
-                monitorName: "Detached",
-                monitorDisplayId: 404,
-                reserveLayoutSpace: true
+        let currentMonitor = makeSettingsTestMonitor(displayId: 202, name: "Studio Display")
+        var export = SettingsExport.defaults()
+        export.monitorBarSettings = [
+            MonitorBarSettings(monitorName: currentMonitor.name, monitorDisplayId: 101, enabled: false)
+        ]
+        export.monitorOrientationSettings = [
+            MonitorOrientationSettings(
+                monitorName: currentMonitor.name,
+                monitorDisplayId: 101,
+                orientation: .vertical
+            )
+        ]
+        export.monitorNiriSettings = [
+            MonitorNiriSettings(
+                monitorName: currentMonitor.name,
+                monitorDisplayId: 101,
+                maxVisibleColumns: 4
+            )
+        ]
+        export.monitorDwindleSettings = [
+            MonitorDwindleSettings(
+                monitorName: currentMonitor.name,
+                monitorDisplayId: 101,
+                smartSplit: true
             )
         ]
 
-        try settings.exportSettings(to: exportURL, mode: .full)
+        settings.applyExport(export, monitors: [currentMonitor])
 
-        let imported = SettingsStore(defaults: makeTestDefaults())
-        let currentMonitor = makeSettingsTestMonitor(displayId: 12, name: "Current")
-        try imported.importSettings(from: exportURL, monitors: [currentMonitor])
+        #expect(settings.monitorBarSettings.first?.monitorDisplayId == currentMonitor.displayId)
+        #expect(settings.monitorOrientationSettings.first?.monitorDisplayId == currentMonitor.displayId)
+        #expect(settings.monitorNiriSettings.first?.monitorDisplayId == currentMonitor.displayId)
+        #expect(settings.monitorDwindleSettings.first?.monitorDisplayId == currentMonitor.displayId)
+        #expect(settings.barSettings(for: currentMonitor)?.enabled == false)
+        #expect(settings.orientationSettings(for: currentMonitor)?.orientation == .vertical)
+        #expect(settings.niriSettings(for: currentMonitor)?.maxVisibleColumns == 4)
+        #expect(settings.dwindleSettings(for: currentMonitor)?.smartSplit == true)
+    }
 
-        #expect(imported.monitorBarSettings.count == 1)
-        #expect(imported.monitorBarSettings.first?.monitorDisplayId == nil)
-        #expect(imported.monitorBarSettings.first?.monitorName == "Detached")
+    @Test func tomlApplyClearsStaleMonitorDisplayIdWhenNameCannotBeResolved() {
+        let settings = SettingsStore(defaults: makeTestDefaults())
+        let currentMonitor = makeSettingsTestMonitor(displayId: 202, name: "Studio Display")
+        var export = SettingsExport.defaults()
+        export.monitorBarSettings = [
+            MonitorBarSettings(monitorName: "Disconnected Display", monitorDisplayId: 101, enabled: false)
+        ]
+
+        settings.applyExport(export, monitors: [currentMonitor])
+
+        #expect(settings.monitorBarSettings.first?.monitorDisplayId == nil)
+        #expect(settings.barSettings(for: currentMonitor) == nil)
+    }
+
+    @Test func tomlApplyRebindsSpecificWorkspaceDisplayByUniqueNameWhenDisplayIdChanges() {
+        let settings = SettingsStore(defaults: makeTestDefaults())
+        let currentMonitor = makeSettingsTestMonitor(displayId: 202, name: "Studio Display")
+        var export = SettingsExport.defaults()
+        export.workspaceConfigurations = [
+            WorkspaceConfiguration(
+                name: "2",
+                monitorAssignment: .specificDisplay(OutputId(displayId: 101, name: currentMonitor.name)),
+                layoutType: .dwindle
+            )
+        ]
+
+        settings.applyExport(export, monitors: [currentMonitor])
+
+        #expect(settings.workspaceConfigurations.first?.monitorAssignment == .specificDisplay(OutputId(from: currentMonitor)))
     }
 }
 
-@Suite(.serialized) @MainActor struct SettingsStoreAppearanceImportTests {
-    @Test func importSettingsApplyingToControllerUsesSharedAppearancePath() throws {
-        let exportURL = makeTestSettingsURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
+@Suite(.serialized) @MainActor struct SettingsStoreAppearanceApplyTests {
+    @Test func persistedSettingsApplyingToControllerUsesSharedAppearancePath() {
         let application = NSApplication.shared
         let originalAppearance = application.appearance
         defer { application.appearance = originalAppearance }
 
-        let exportSource = SettingsStore(defaults: makeTestDefaults())
-        exportSource.hotkeysEnabled = false
-        exportSource.workspaceBarEnabled = false
-        exportSource.appearanceMode = .light
-        try exportSource.exportSettings(to: exportURL, mode: .full)
-
         let controller = makeLayoutPlanTestController()
         defer { controller.setEnabled(false) }
+        controller.settings.hotkeysEnabled = false
+        controller.settings.workspaceBarEnabled = false
+        controller.settings.appearanceMode = .light
 
         application.appearance = NSAppearance(named: .darkAqua)
-        try controller.settings.importSettings(from: exportURL, applyingTo: controller)
+        controller.applyPersistedSettings(controller.settings)
 
         #expect(controller.settings.appearanceMode == .light)
         #expect(application.appearance?.name == .aqua)
     }
 }
 
-@Suite @MainActor struct SettingsStoreBuiltInDefaultsTests {
+@MainActor struct SettingsStoreBuiltInDefaultsTests {
     @Test func settingsStoreBootsWithPromotedDefaultsAndExcludedLocalStateStaysOut() {
         let settings = SettingsStore(defaults: makeTestDefaults())
 
@@ -1605,7 +827,7 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite struct SettingsSectionTests {
+struct SettingsSectionTests {
     @Test func settingsSectionsExcludeMenuSection() {
         #expect(SettingsSection.allCases.map(\.id) == [
             "general",
@@ -1621,7 +843,7 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite @MainActor struct RuntimeStateStoreTests {
+@MainActor struct RuntimeStateStoreTests {
     @Test func runtimeStateRoundTripsWindowRestoreCatalogAndUpdaterState() {
         let defaults = makeTestDefaults()
         let directory = configurationDirectoryForTests(defaults: defaults)
@@ -1643,7 +865,7 @@ private func atomicallyReplaceSettingsDataForTests(
     }
 }
 
-@Suite @MainActor struct SettingsFilePersistenceTests {
+@MainActor struct SettingsFilePersistenceTests {
     @Test func missingFileMaterializesDefaults() {
         let defaults = makeTestDefaults()
         let directory = configurationDirectoryForTests(defaults: defaults)
@@ -1736,12 +958,10 @@ private func atomicallyReplaceSettingsDataForTests(
         }
 
         let originalData = try Data(contentsOf: settings.settingsFileURL)
-        let originalModificationDate = try #require(
-            settings.settingsFileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        )
+        let originalModificationDate = try #require(settings.settingsFileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
 
         let export = try SettingsTOMLCodec.decode(originalData)
-        let sameDigitGapCandidates = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(Double.init)
+        let sameDigitGapCandidates = Array(10...99).map(Double.init) + Array(0...9).map(Double.init)
         var replacementExport: SettingsExport?
         var replacementData: Data?
         for gapSize in sameDigitGapCandidates where gapSize != export.gapSize {
@@ -1829,7 +1049,7 @@ private func atomicallyReplaceSettingsDataForTests(
         #expect(String(data: rawData, encoding: .utf8) == invalidPayload)
     }
 
-    @Test func selfWriteThroughSettingsStoreDoesNotFireExternalReload() async throws {
+    @Test func selfWriteThroughSettingsStoreDoesNotFireExternalReload() async {
         let defaults = makeTestDefaults()
         let directory = configurationDirectoryForTests(defaults: defaults)
         let settings = SettingsStore(

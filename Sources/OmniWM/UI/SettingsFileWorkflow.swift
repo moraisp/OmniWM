@@ -1,0 +1,59 @@
+import AppKit
+import SwiftUI
+
+enum SettingsFileAction {
+    case reveal
+    case open
+}
+
+@MainActor
+enum SettingsFileWorkflow {
+    static func perform(
+        _ action: SettingsFileAction,
+        settings: SettingsStore,
+        openFile: (URL) -> Bool = { NSWorkspace.shared.open($0) },
+        revealFile: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
+    ) throws -> SettingsFileStatus {
+        try settings.ensureSettingsFileAvailable()
+        let targetURL = settings.settingsFileURL
+
+        switch action {
+        case .reveal:
+            revealFile([targetURL])
+            return .revealed
+        case .open:
+            guard openFile(targetURL) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            return .opened
+        }
+    }
+}
+
+enum SettingsFileStatus: Equatable {
+    case revealed
+    case opened
+    case error(String)
+
+    var message: String {
+        switch self {
+        case .revealed: "Settings file revealed in Finder"
+        case .opened: "Settings file opened"
+        case let .error(msg): "Error: \(msg)"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .opened, .revealed: "checkmark.circle.fill"
+        case .error: "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .opened, .revealed: .green
+        case .error: .red
+        }
+    }
+}

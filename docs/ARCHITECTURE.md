@@ -947,19 +947,19 @@ Actions can carry multiple persisted bindings, so any extra default shortcuts sh
 
 ### 6.3 Adding a New Setting
 
-1. **Add the property** to `Sources/OmniWM/Core/Config/SettingsStore.swift` with a UserDefaults key.
+1. **Add the property** to `Sources/OmniWM/Core/Config/SettingsStore.swift`.
 
 2. **Wire the runtime behavior** in `WMController.applyPersistedSettings()` or the relevant handler that consumes the setting.
 
 3. **Add UI** in the appropriate settings tab under `Sources/OmniWM/UI/`.
 
-4. **Update config export/import** in `Sources/OmniWM/Core/Config/SettingsExport.swift` for persisted user preferences that belong in editable config so full export, compact backup, and import all round-trip correctly. Do not export remote payloads or operational cache state such as updater release notes, release URLs, last-check timestamps, or skipped-release markers.
+4. **Update the TOML settings model** in `Sources/OmniWM/Core/Config/SettingsExport.swift`, `Sources/OmniWM/Core/Config/CanonicalTOMLConfig.swift`, and `Sources/OmniWM/Core/Config/SettingsTOMLCodec.swift` for persisted user preferences that belong in editable config. Do not include remote payloads or operational cache state such as updater release notes, release URLs, last-check timestamps, or skipped-release markers.
 
-5. **Check config-file touchpoints** when the change affects config discoverability or UX. `Sources/OmniWM/UI/ConfigFileWorkflow.swift` is the generic workflow layer, and the `Config File` section in `Sources/OmniWM/UI/SettingsView.swift` is the main user-facing entry point; most new settings do not need workflow code changes, but contributor-facing config behavior and copy should remain accurate.
+5. **Check settings-file touchpoints** when the change affects config discoverability or UX. `Sources/OmniWM/UI/SettingsFileWorkflow.swift` is the open/reveal workflow layer, and the `Settings File` section in `Sources/OmniWM/UI/SettingsView.swift` is the main user-facing entry point; most new settings do not need workflow code changes, but contributor-facing config behavior and copy should remain accurate.
 
-6. **Handle migration** if needed in `Sources/OmniWM/Core/Config/SettingsMigration.swift`.
+6. **Handle schema compatibility** in the TOML codec if needed. `settings.toml` is the only settings source of truth.
 
-7. **Add round-trip coverage** in tests: verify the setting survives store load/save and config export/import so it cannot silently disappear from `~/.config/omniwm/settings.json`.
+7. **Add round-trip coverage** in tests: verify the setting survives store load/save and TOML encode/decode so it cannot silently disappear from `~/.config/omniwm/settings.toml`.
 
 ### 6.4 Modifying Layout Behavior
 

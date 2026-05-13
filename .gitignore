@@ -29,9 +29,14 @@ Frameworks/
 
 # Codex
 .codex-home/
+.claude/
 .tmp/
 .cache/
 .codex-cache/
+/AGENTS.md
+/CLAUDE.md
 
 # Local documentation
 STABILITY_IMPROVEMENTS.md
+/BACKPORT-LEDGER.md
+/BACKPORT-TRIAGE.tsv

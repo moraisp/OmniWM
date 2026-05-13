@@ -4,13 +4,6 @@ import Testing
 
 @testable import OmniWM
 
-private func makeStatusBarConfigWorkflowTestURL() -> URL {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("omniwm-status-bar-workflow-tests", isDirectory: true)
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return directory.appendingPathComponent("settings-\(UUID().uuidString).json")
-}
-
 private func makeStatusBarMenuTestDirectory() -> URL {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("omniwm-status-bar-menu-tests", isDirectory: true)
@@ -50,12 +43,30 @@ private func makeStatusBarMenuTestDirectory() -> URL {
         let menu = builder.buildMenu()
         let labels = menu.items.compactMap(\.view).flatMap(textLabels(in:))
 
-        #expect(labels.contains("CONFIG FILE"))
-        #expect(labels.contains("Export Editable Config"))
-        #expect(labels.contains("Export Compact Backup"))
-        #expect(labels.contains("Import Settings"))
+        #expect(labels.contains("SETTINGS FILE"))
         #expect(labels.contains("Reveal Settings File"))
-        #expect(labels.contains("Open Settings File"))
+        #expect(labels.contains("Edit Settings File"))
+        #expect(labels.allSatisfy { !$0.localizedCaseInsensitiveContains("export") })
+        #expect(labels.allSatisfy { !$0.localizedCaseInsensitiveContains("import") })
+    }
+
+    @Test func settingsFileMenuRowsDelegateExpectedActions() throws {
+        let controller = makeLayoutPlanTestController()
+        let settings = controller.settings
+        let builder = StatusBarMenuBuilder(settings: settings, controller: controller)
+        var performedActions: [SettingsFileAction] = []
+        builder.settingsFileActionPerformer = { action, receivedSettings in
+            #expect(receivedSettings.settingsFileURL == settings.settingsFileURL)
+            performedActions.append(action)
+            return action == .reveal ? .revealed : .opened
+        }
+
+        let menu = builder.buildMenu()
+
+        try actionRow(in: menu, labeled: "Reveal Settings File").performActionForTests()
+        try actionRow(in: menu, labeled: "Edit Settings File").performActionForTests()
+
+        #expect(performedActions == [.reveal, .open])
     }
 
     @Test func buildMenuIncludesCheckForUpdatesRowAndDelegatesAction() {
@@ -108,120 +119,42 @@ private func makeStatusBarMenuTestDirectory() -> URL {
         #expect(labels.contains("Install CLI to PATH…"))
     }
 
-    @Test func exportActionReportsSuccessAlert() {
-        let controller = makeLayoutPlanTestController()
-        let builder = StatusBarMenuBuilder(settings: controller.settings, controller: controller)
-        let exportURL = makeStatusBarConfigWorkflowTestURL()
-        builder.configFileURL = exportURL
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-        var received: [(String, String)] = []
-        builder.infoAlertPresenter = { title, message in
-            received.append((title, message))
-        }
-
-        builder.performConfigFileAction(.export(.full))
-
-        #expect(received.count == 1)
-        #expect(received.first?.0 == "Editable Config Exported")
-        #expect(received.first?.1 == exportURL.path)
-    }
-
-    @Test func revealActionCreatesFileAndReportsSuccessAlert() {
+    @Test func revealActionDoesNotPresentPopup() {
         let controller = makeLayoutPlanTestController()
         let settings = controller.settings
         let builder = StatusBarMenuBuilder(settings: settings, controller: controller)
-        let exportURL = makeStatusBarConfigWorkflowTestURL()
-        builder.configFileURL = exportURL
-        var received: [(String, String)] = []
-        builder.infoAlertPresenter = { title, message in
-            received.append((title, message))
+        var didPresentAlert = false
+        var performedAction: SettingsFileAction?
+        builder.infoAlertPresenter = { _, _ in
+            didPresentAlert = true
         }
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-        try? FileManager.default.removeItem(at: exportURL)
-
-        builder.performConfigFileAction(.reveal)
-
-        #expect(FileManager.default.fileExists(atPath: exportURL.path) == true)
-        #expect(received.count == 1)
-        #expect(received.first?.0 == "Settings File Revealed")
-        #expect(received.first?.1 == exportURL.path)
-    }
-
-    @Test func importActionReportsSuccessAlert() throws {
-        let exportURL = makeStatusBarConfigWorkflowTestURL()
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-
-        let sourceController = makeLayoutPlanTestController()
-        sourceController.settings.focusFollowsWindowToMonitor = true
-        try sourceController.settings.exportSettings(to: exportURL, mode: .full)
-
-        let targetController = makeLayoutPlanTestController()
-        targetController.settings.focusFollowsWindowToMonitor = false
-        let builder = StatusBarMenuBuilder(settings: targetController.settings, controller: targetController)
-        builder.configFileURL = exportURL
-        var received: [(String, String)] = []
-        builder.infoAlertPresenter = { title, message in
-            received.append((title, message))
+        builder.settingsFileActionPerformer = { action, receivedSettings in
+            performedAction = action
+            #expect(receivedSettings.settingsFileURL == settings.settingsFileURL)
+            return .revealed
         }
 
-        builder.performConfigFileAction(.import)
+        builder.performSettingsFileAction(.reveal)
 
-        #expect(targetController.settings.focusFollowsWindowToMonitor == true)
-        #expect(received.count == 1)
-        #expect(received.first?.0 == "Settings Imported")
-        #expect(received.first?.1 == exportURL.path)
+        #expect(performedAction == .reveal)
+        #expect(didPresentAlert == false)
+        #expect(settings.settingsFileURL.lastPathComponent == "settings.toml")
     }
 
-    @Test func exportActionReportsSharedFailureTitle() {
+    @Test func openActionFailureDoesNotPresentPopup() {
         let controller = makeLayoutPlanTestController()
         let builder = StatusBarMenuBuilder(settings: controller.settings, controller: controller)
-        var received: [(String, String)] = []
-        builder.infoAlertPresenter = { title, message in
-            received.append((title, message))
+        var didPresentAlert = false
+        builder.infoAlertPresenter = { _, _ in
+            didPresentAlert = true
         }
-        builder.configFileActionPerformer = { _, _, _, _ in
-            throw CocoaError(.fileWriteUnknown)
-        }
-
-        builder.performConfigFileAction(.export(.full))
-
-        #expect(received.count == 1)
-        #expect(received.first?.0 == ConfigFileAction.export(.full).failureAlertTitle)
-    }
-
-    @Test func openActionReportsSharedFailureTitle() {
-        let controller = makeLayoutPlanTestController()
-        let builder = StatusBarMenuBuilder(settings: controller.settings, controller: controller)
-        var received: [(String, String)] = []
-        builder.infoAlertPresenter = { title, message in
-            received.append((title, message))
-        }
-        builder.configFileActionPerformer = { _, _, _, _ in
+        builder.settingsFileActionPerformer = { _, _ in
             throw CocoaError(.fileNoSuchFile)
         }
 
-        builder.performConfigFileAction(.open)
+        builder.performSettingsFileAction(.open)
 
-        #expect(received.count == 1)
-        #expect(received.first?.0 == ConfigFileAction.open.failureAlertTitle)
-    }
-
-    @Test func importActionReportsSharedFailureTitle() {
-        let controller = makeLayoutPlanTestController()
-        let builder = StatusBarMenuBuilder(settings: controller.settings, controller: controller)
-        let exportURL = makeStatusBarConfigWorkflowTestURL()
-        builder.configFileURL = exportURL
-        var received: [(String, String)] = []
-        builder.infoAlertPresenter = { title, message in
-            received.append((title, message))
-        }
-        defer { try? FileManager.default.removeItem(at: exportURL) }
-        try? FileManager.default.removeItem(at: exportURL)
-
-        builder.performConfigFileAction(.import)
-
-        #expect(received.count == 1)
-        #expect(received.first?.0 == ConfigFileAction.import.failureAlertTitle)
+        #expect(didPresentAlert == false)
     }
 
     @Test func statusBarTitleUsesInteractionMonitorWorkspaceAndFocusedApp() {
@@ -377,6 +310,15 @@ private func makeStatusBarMenuTestDirectory() -> URL {
     private func textLabels(in view: NSView) -> [String] {
         let direct = (view as? NSTextField).map(\.stringValue).map { [$0] } ?? []
         return direct + view.subviews.flatMap(textLabels(in:))
+    }
+
+    private func actionRow(in menu: NSMenu, labeled label: String) throws -> MenuActionRowView {
+        try #require(
+            menu.items
+                .compactMap(\.view)
+                .compactMap { $0 as? MenuActionRowView }
+                .first { textLabels(in: $0).contains(label) }
+        )
     }
 
     private func makeStatusBarController(for controller: WMController) -> StatusBarController {

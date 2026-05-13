@@ -384,14 +384,11 @@ Hide or reveal status bar icons using a separator item:
 Access settings by clicking OmniWM's status bar icon and selecting **Settings** or **App Rules**.
 Mouse and gesture settings are available in Settings.
 
-OmniWM stores its editable config at `~/.config/omniwm/settings.json`, while private runtime state lives in `UserDefaults`.
+OmniWM stores its editable config at `~/.config/omniwm/settings.toml`; that file is the canonical settings source and is live-reloaded when saved from an editor.
 
-- **Editable Config** writes the full canonical settings file, including hotkeys and monitor overrides, so it can be edited directly.
-- **Compact Backup** writes only values that differ from defaults. Import still merges that backup back into the full canonical settings model.
-- **Create Config File**, **Reveal Settings File**, and **Open Settings File** create `settings.json` on first use if it does not exist yet.
-- `updateChecksEnabled` is part of the persisted settings model, so it round-trips through full export, compact backup, and import.
-- Fetched release notes, release URLs, last-check timestamps, and skipped-release state stay out of `settings.json` and remain local runtime or private `UserDefaults` state only.
-- The persisted window restore catalog also stays in private `UserDefaults`. It stores local restore metadata such as workspace target, preferred monitor, floating geometry, and matching window identity fields so managed floating windows can be restored or rescued across relaunches without being exported to `settings.json`.
+- **Reveal Settings File** and **Edit Settings File** open the canonical TOML file and recreate it from the running settings if it was deleted.
+- `updateChecksEnabled` is part of the persisted settings model, so it round-trips through `settings.toml`.
+- Fetched release notes, release URLs, last-check timestamps, skipped-release state, and the persisted window restore catalog stay out of `settings.toml` and remain private runtime state.
 
 ## App Rules
 
