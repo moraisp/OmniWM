@@ -17,7 +17,7 @@ NOTARIZE_PROFILE="OmniWM-Notarize"
 ENTITLEMENTS="$ROOT_DIR/OmniWM.entitlements"
 
 echo "Running release checks..."
-make -C "$ROOT_DIR" check
+make -C "$ROOT_DIR" release-check
 
 "$ROOT_DIR/Scripts/ghostty-preflight.sh" verify
 

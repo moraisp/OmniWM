@@ -1,4 +1,4 @@
-.PHONY: format format-check lint lint-fix no-zig-audit build test verify check check-tool-versions check-swiftformat-version check-swiftlint-version
+.PHONY: format format-check lint lint-fix no-zig-audit build test release-check verify check check-tool-versions check-swiftformat-version check-swiftlint-version
 
 SWIFTFORMAT_VERSION = 0.61.1
 SWIFTLINT_VERSION = 0.63.2
@@ -40,6 +40,8 @@ build:
 test:
 	./Scripts/ghostty-preflight.sh verify
 	$(SWIFT_WITH_GHOSTTY) swift test
+
+release-check: no-zig-audit build test
 
 verify: format-check lint no-zig-audit build test
 
