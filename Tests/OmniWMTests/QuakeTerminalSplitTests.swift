@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyKit
 @testable import OmniWM
 import Testing
 
@@ -186,6 +187,36 @@ import Testing
         #expect(container.dividerViewForTesting(at: address) === activeDividerView)
         #expect(abs((container.root.ratio(at: []) ?? 0) - 0.5) < 0.001)
         #expect(abs((container.root.ratio(at: address) ?? 0) - 0.7) < 0.001)
+    }
+
+    @Test func relayoutRoutesPaneSizeSyncThroughSurfaceViews() {
+        let left = makeSurfaceView()
+        let right = makeSurfaceView()
+        var leftAppliedSizes: [GhosttySurfacePixelSize] = []
+        var rightAppliedSizes: [GhosttySurfacePixelSize] = []
+        left.surfaceSizeProviderForTesting = { ghostty_surface_size_s(
+            columns: 0,
+            rows: 0,
+            width_px: 0,
+            height_px: 0,
+            cell_width_px: 1,
+            cell_height_px: 1
+        ) }
+        right.surfaceSizeProviderForTesting = left.surfaceSizeProviderForTesting
+        left.surfaceSizeApplyForTesting = { leftAppliedSizes.append($0) }
+        right.surfaceSizeApplyForTesting = { rightAppliedSizes.append($0) }
+
+        let container = QuakeSplitContainer(initialView: left)
+        container.frame = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        container.split(view: left, direction: .horizontal, newView: right)
+
+        leftAppliedSizes.removeAll()
+        rightAppliedSizes.removeAll()
+        container.frame = CGRect(x: 0, y: 0, width: 1200, height: 600)
+        container.relayout()
+
+        #expect(leftAppliedSizes == [GhosttySurfacePixelSize(widthPx: 600, heightPx: 600)])
+        #expect(rightAppliedSizes == [GhosttySurfacePixelSize(widthPx: 600, heightPx: 600)])
     }
 
     private func makeSurfaceView() -> GhosttySurfaceView {

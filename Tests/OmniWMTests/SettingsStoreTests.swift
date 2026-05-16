@@ -12,6 +12,56 @@ private func makeTestDefaults() -> UserDefaults {
     return UserDefaults(suiteName: suiteName)!
 }
 
+@MainActor struct QuakeTerminalSettingsValidationTests {
+    @Test func normalizesQuakeTerminalPercentagesOnAssignment() {
+        let settings = SettingsStore(defaults: makeTestDefaults())
+
+        settings.quakeTerminalWidthPercent = 5
+        settings.quakeTerminalHeightPercent = 150
+
+        #expect(settings.quakeTerminalWidthPercent == 10)
+        #expect(settings.quakeTerminalHeightPercent == 100)
+
+        settings.quakeTerminalWidthPercent = Double.nan
+        settings.quakeTerminalHeightPercent = Double.infinity
+
+        #expect(settings.quakeTerminalWidthPercent == 50)
+        #expect(settings.quakeTerminalHeightPercent == 50)
+    }
+
+    @Test func resetsInvalidQuakeTerminalCustomFrames() {
+        let settings = SettingsStore(defaults: makeTestDefaults())
+
+        settings.quakeTerminalUseCustomFrame = true
+        settings.quakeTerminalCustomFrame = CGRect(x: 0, y: 0, width: 199, height: 400)
+
+        #expect(settings.quakeTerminalUseCustomFrame == false)
+        #expect(settings.quakeTerminalCustomFrame == nil)
+
+        settings.quakeTerminalUseCustomFrame = true
+        settings.quakeTerminalCustomFrame = CGRect(x: 10, y: 20, width: 1200, height: 700)
+
+        #expect(settings.quakeTerminalUseCustomFrame == true)
+        #expect(settings.quakeTerminalCustomFrame == CGRect(x: 10, y: 20, width: 1200, height: 700))
+    }
+
+    @Test func normalizesInvalidQuakeTerminalValuesFromExport() {
+        let settings = SettingsStore(defaults: makeTestDefaults())
+        var export = SettingsExport.defaults()
+        export.quakeTerminalWidthPercent = Double.nan
+        export.quakeTerminalHeightPercent = 150
+        export.quakeTerminalUseCustomFrame = true
+        export.quakeTerminalCustomFrame = QuakeTerminalFrameExport(x: 0, y: 0, width: 199, height: 700)
+
+        settings.applyExport(export, monitors: [])
+
+        #expect(settings.quakeTerminalWidthPercent == 50)
+        #expect(settings.quakeTerminalHeightPercent == 100)
+        #expect(settings.quakeTerminalUseCustomFrame == false)
+        #expect(settings.quakeTerminalCustomFrame == nil)
+    }
+}
+
 private func makeSettingsTestMonitor(
     displayId: CGDirectDisplayID,
     name: String,

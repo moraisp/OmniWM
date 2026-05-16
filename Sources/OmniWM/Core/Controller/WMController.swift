@@ -100,6 +100,9 @@ final class WMController {
         },
         restoreFocusTarget: { [weak self] target in
             self?.restoreQuakeTerminalFocus(to: target)
+        },
+        focusedWindowScreenProvider: { [weak self] in
+            self?.focusedManagedWindowScreenForQuakeTerminal()
         }
     )
     @ObservationIgnored
@@ -1130,6 +1133,39 @@ final class WMController {
                 isManaged: false
             )
         )
+    }
+
+    func focusedManagedWindowScreenForQuakeTerminal() -> NSScreen? {
+        guard let token = focusedOrFrontmostWindowTokenForAutomation(
+            preferFrontmostWhenNonManagedFocusActive: true
+        ),
+            let entry = workspaceManager.entry(for: token)
+        else {
+            return nil
+        }
+
+        if let monitorId = entry.observedState.monitorId
+            ?? entry.desiredState.monitorId
+            ?? workspaceManager.monitorId(for: entry.workspaceId),
+            let screen = screen(for: monitorId)
+        {
+            return screen
+        }
+
+        if let frame = entry.observedState.frame
+            ?? entry.desiredState.floatingFrame
+            ?? entry.floatingState?.lastFrame,
+            let monitor = frame.center.monitorApproximation(in: workspaceManager.monitors)
+        {
+            return screen(for: monitor.id)
+        }
+
+        return nil
+    }
+
+    private func screen(for monitorId: Monitor.ID) -> NSScreen? {
+        guard let monitor = workspaceManager.monitor(byId: monitorId) else { return nil }
+        return NSScreen.screens.first(where: { $0.displayId == monitor.displayId })
     }
 
     private func focusedManagedTokenForCommand() -> WindowToken? {

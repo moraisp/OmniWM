@@ -343,11 +343,25 @@ final class SettingsStore {
     }
 
     var quakeTerminalWidthPercent = SettingsStore.defaultExport.quakeTerminalWidthPercent {
-        didSet { scheduleSave() }
+        didSet {
+            let normalized = QuakeTerminalGeometryPolicy.normalizedDimensionPercent(quakeTerminalWidthPercent)
+            if normalized != quakeTerminalWidthPercent {
+                quakeTerminalWidthPercent = normalized
+                return
+            }
+            scheduleSave()
+        }
     }
 
     var quakeTerminalHeightPercent = SettingsStore.defaultExport.quakeTerminalHeightPercent {
-        didSet { scheduleSave() }
+        didSet {
+            let normalized = QuakeTerminalGeometryPolicy.normalizedDimensionPercent(quakeTerminalHeightPercent)
+            if normalized != quakeTerminalHeightPercent {
+                quakeTerminalHeightPercent = normalized
+                return
+            }
+            scheduleSave()
+        }
     }
 
     var quakeTerminalAnimationDuration = SettingsStore.defaultExport.quakeTerminalAnimationDuration {
@@ -400,7 +414,7 @@ final class SettingsStore {
             return NSRect(x: x, y: y, width: width, height: height)
         }
         set {
-            if let frame = newValue {
+            if let frame = QuakeTerminalGeometryPolicy.normalizedCustomFrame(newValue) {
                 quakeTerminalCustomFrameX = frame.origin.x
                 quakeTerminalCustomFrameY = frame.origin.y
                 quakeTerminalCustomFrameWidth = frame.size.width
@@ -410,6 +424,7 @@ final class SettingsStore {
                 quakeTerminalCustomFrameY = nil
                 quakeTerminalCustomFrameWidth = nil
                 quakeTerminalCustomFrameHeight = nil
+                quakeTerminalUseCustomFrame = false
             }
         }
     }
@@ -666,8 +681,8 @@ final class SettingsStore {
 
         quakeTerminalEnabled = export.quakeTerminalEnabled
         quakeTerminalPosition = QuakeTerminalPosition(rawValue: export.quakeTerminalPosition) ?? .center
-        quakeTerminalWidthPercent = export.quakeTerminalWidthPercent
-        quakeTerminalHeightPercent = export.quakeTerminalHeightPercent
+        quakeTerminalWidthPercent = QuakeTerminalGeometryPolicy.normalizedDimensionPercent(export.quakeTerminalWidthPercent)
+        quakeTerminalHeightPercent = QuakeTerminalGeometryPolicy.normalizedDimensionPercent(export.quakeTerminalHeightPercent)
         quakeTerminalAnimationDuration = export.quakeTerminalAnimationDuration
         quakeTerminalAutoHide = export.quakeTerminalAutoHide
         quakeTerminalOpacity = export.quakeTerminalOpacity ?? baseline.quakeTerminalOpacity ?? 1.0
@@ -675,7 +690,7 @@ final class SettingsStore {
             rawValue: export.quakeTerminalMonitorMode ?? baseline.quakeTerminalMonitorMode ?? ""
         ) ?? .focusedWindow
         quakeTerminalCustomFrame = export.quakeTerminalCustomFrame?.frame
-        quakeTerminalUseCustomFrame = export.quakeTerminalUseCustomFrame
+        quakeTerminalUseCustomFrame = export.quakeTerminalUseCustomFrame && quakeTerminalCustomFrame != nil
 
         appearanceMode = AppearanceMode(rawValue: export.appearanceMode) ?? .dark
     }

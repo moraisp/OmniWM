@@ -49,6 +49,7 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
     private let captureRestoreTarget: @MainActor () -> QuakeTerminalRestoreTarget?
     private let restoreFocusTarget: @MainActor (QuakeTerminalRestoreTarget) -> Void
     private let isWindowFocused: @MainActor (NSWindow) -> Bool
+    private let focusedWindowScreenProvider: @MainActor () -> NSScreen?
 
     private static var ghosttyInitialized = false
 
@@ -57,13 +58,15 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
         motionPolicy: MotionPolicy,
         captureRestoreTarget: @escaping @MainActor () -> QuakeTerminalRestoreTarget? = { nil },
         restoreFocusTarget: @escaping @MainActor (QuakeTerminalRestoreTarget) -> Void = { _ in },
-        isWindowFocused: @escaping @MainActor (NSWindow) -> Bool = { $0.isKeyWindow }
+        isWindowFocused: @escaping @MainActor (NSWindow) -> Bool = { $0.isKeyWindow },
+        focusedWindowScreenProvider: @escaping @MainActor () -> NSScreen? = { nil }
     ) {
         self.settings = settings
         self.motionPolicy = motionPolicy
         self.captureRestoreTarget = captureRestoreTarget
         self.restoreFocusTarget = restoreFocusTarget
         self.isWindowFocused = isWindowFocused
+        self.focusedWindowScreenProvider = focusedWindowScreenProvider
         super.init()
     }
 
@@ -236,17 +239,13 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
 
     func applyGeometryToVisibleWindow() {
         guard let window, visible else { return }
+        let screen = targetScreen()
 
-        if settings.quakeTerminalUseCustomFrame,
-           let customFrame = settings.quakeTerminalCustomFrame,
-           let screen = window.screen ?? NSScreen.main,
-           screen.visibleFrame.intersects(customFrame)
-        {
+        if let customFrame = customFrameForShow(on: screen) {
             window.setFrame(customFrame, display: true)
             return
         }
 
-        let screen = targetScreen()
         settings.quakeTerminalPosition.setFinal(
             in: window,
             on: screen,
@@ -537,7 +536,12 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
     }
 
     private func persistCustomFrame(_ frame: NSRect) {
-        settings.quakeTerminalCustomFrame = frame
+        guard let customFrame = QuakeTerminalGeometryPolicy.normalizedCustomFrame(frame) else {
+            settings.resetQuakeTerminalCustomFrame()
+            return
+        }
+
+        settings.quakeTerminalCustomFrame = customFrame
         settings.quakeTerminalUseCustomFrame = true
     }
 
@@ -546,10 +550,7 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
         let screen = targetScreen()
         let generation = beginAnimationTransition()
 
-        if settings.quakeTerminalUseCustomFrame,
-           let customFrame = settings.quakeTerminalCustomFrame,
-           screen.visibleFrame.intersects(customFrame)
-        {
+        if let customFrame = customFrameForShow(on: screen) {
             window.setFrame(customFrame, display: false)
             window.level = .popUpMenu
             window.makeKeyAndOrderFront(nil)
@@ -764,6 +765,16 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
         pasteboard.setString(text, forType: .string)
     }
 
+    private func customFrameForShow(on screen: NSScreen) -> NSRect? {
+        guard settings.quakeTerminalUseCustomFrame else { return nil }
+        guard let customFrame = QuakeTerminalGeometryPolicy.normalizedCustomFrame(settings.quakeTerminalCustomFrame) else {
+            settings.resetQuakeTerminalCustomFrame()
+            return nil
+        }
+        guard screen.visibleFrame.intersects(customFrame) else { return nil }
+        return customFrame
+    }
+
     private func targetScreen() -> NSScreen {
         let monitors = Monitor.current()
 
@@ -777,6 +788,9 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
             }
 
         case .focusedWindow:
+            if let screen = focusedWindowScreenProvider() {
+                return screen
+            }
             if let screen = screenOfFocusedWindow(monitors: monitors) {
                 return screen
             }
@@ -796,34 +810,133 @@ final class QuakeTerminalController: NSObject, NSWindowDelegate, QuakeTerminalTa
             return nil
         }
 
-        let ownPID = ProcessInfo.processInfo.processIdentifier
+        if let displayId = Self.focusedWindowDisplayId(
+            monitors: monitors,
+            windowList: windowList,
+            ownPID: ProcessInfo.processInfo.processIdentifier
+        ) {
+            return NSScreen.screens.first(where: { $0.displayId == displayId })
+        }
 
+        return nil
+    }
+
+    static func focusedWindowDisplayId(
+        monitors: [Monitor],
+        windowList: [[String: Any]],
+        ownPID: pid_t,
+        toAppKitRect: (CGRect) -> CGRect = ScreenCoordinateSpace.toAppKit(rect:)
+    ) -> CGDirectDisplayID? {
         for windowInfo in windowList {
-            guard let windowPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+            guard let windowPID = int32Value(windowInfo[kCGWindowOwnerPID as String]),
                   windowPID != ownPID,
-                  let layer = windowInfo[kCGWindowLayer as String] as? Int,
-                  layer == 0,
-                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
-                  let x = boundsDict["X"],
-                  let y = boundsDict["Y"],
-                  let width = boundsDict["Width"],
-                  let height = boundsDict["Height"],
-                  width > 50, height > 50
+                  intValue(windowInfo[kCGWindowLayer as String]) == 0,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
+                  let x = cgFloatValue(boundsDict["X"]),
+                  let y = cgFloatValue(boundsDict["Y"]),
+                  let width = cgFloatValue(boundsDict["Width"]),
+                  let height = cgFloatValue(boundsDict["Height"]),
+                  x.isFinite,
+                  y.isFinite,
+                  width.isFinite,
+                  height.isFinite,
+                  width > 50,
+                  height > 50,
+                  width <= QuakeTerminalGeometryPolicy.maximumCustomFrameDimensionPoints,
+                  height <= QuakeTerminalGeometryPolicy.maximumCustomFrameDimensionPoints
             else {
                 continue
             }
 
-            let windowCenter = CGPoint(x: x + width / 2, y: y + height / 2)
-            let flippedCenter = CGPoint(x: windowCenter.x, y: NSScreen.screens.first!.frame.height - windowCenter.y)
-
-            if let monitor = flippedCenter.monitorApproximation(in: monitors),
-               let screen = NSScreen.screens.first(where: { $0.displayId == monitor.displayId })
-            {
-                return screen
+            let appKitFrame = toAppKitRect(CGRect(x: x, y: y, width: width, height: height))
+            if let monitor = appKitFrame.center.monitorApproximation(in: monitors) {
+                return monitor.displayId
             }
         }
 
         return nil
+    }
+
+    private static func cgFloatValue(_ value: Any?) -> CGFloat? {
+        switch value {
+        case let value as CGFloat:
+            return value
+        case let value as Double:
+            return CGFloat(value)
+        case let value as Float:
+            return CGFloat(value)
+        case let value as Int:
+            return CGFloat(value)
+        case let value as NSNumber:
+            return CGFloat(truncating: value)
+        default:
+            return nil
+        }
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        switch value {
+        case let value as Int:
+            return value
+        case let value as Int32:
+            return Int(value)
+        case let value as Int64:
+            return Int(exactly: value)
+        case let value as NSNumber:
+            guard let value = exactInt64Value(value) else { return nil }
+            return Int(exactly: value)
+        default:
+            return nil
+        }
+    }
+
+    private static func int32Value(_ value: Any?) -> Int32? {
+        switch value {
+        case let value as Int32:
+            return value
+        case let value as Int:
+            return Int32(exactly: value)
+        case let value as Int64:
+            return Int32(exactly: value)
+        case let value as NSNumber:
+            guard let value = exactInt64Value(value) else { return nil }
+            return Int32(exactly: value)
+        default:
+            return nil
+        }
+    }
+
+    private static func exactInt64Value(_ value: NSNumber) -> Int64? {
+        let type = CFNumberGetType(value)
+        switch type {
+        case .charType,
+             .shortType,
+             .intType,
+             .longType,
+             .longLongType,
+             .sInt8Type,
+             .sInt16Type,
+             .sInt32Type,
+             .sInt64Type,
+             .cfIndexType,
+             .nsIntegerType:
+            var exact: Int64 = 0
+            guard CFNumberGetValue(value, .sInt64Type, &exact) else { return nil }
+            return exact
+        default:
+            var doubleValue = 0.0
+            guard CFNumberGetValue(value, .doubleType, &doubleValue),
+                  doubleValue.isFinite,
+                  doubleValue.rounded(.towardZero) == doubleValue,
+                  doubleValue >= Double(Int64.min),
+                  doubleValue <= Double(Int64.max)
+            else {
+                return nil
+            }
+            let exact = Int64(doubleValue)
+            guard Double(exact) == doubleValue else { return nil }
+            return exact
+        }
     }
 
     private func surfaceClosed(processAlive: Bool) {

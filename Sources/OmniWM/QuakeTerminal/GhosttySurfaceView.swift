@@ -44,6 +44,9 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     private var markedText: NSMutableAttributedString = NSMutableAttributedString()
     private var keyTextAccumulator: [String]? = nil
     private var lastPerformKeyEvent: TimeInterval?
+    private var lastAppliedSurfacePixelSize: GhosttySurfacePixelSize?
+    private var lastAppliedContentScale: CGFloat?
+    private var lastAppliedDisplayId: UInt32?
 
     private let resizeEdgeThreshold: CGFloat = 8.0
 
@@ -56,6 +59,9 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
     private var interactionMode: InteractionMode = .terminal
     private(set) var isInteracting: Bool = false
     var onFrameChanged: ((NSRect) -> Void)?
+    var onSurfaceSizeSyncForTesting: ((CGSize, CGFloat) -> Void)?
+    var surfaceSizeProviderForTesting: (() -> ghostty_surface_size_s)?
+    var surfaceSizeApplyForTesting: ((GhosttySurfacePixelSize) -> Void)?
 
     override var acceptsFirstResponder: Bool {
         true
@@ -93,6 +99,7 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         if let layer {
             let scale = layer.contentsScale
             ghostty_surface_set_content_scale(surface, scale, scale)
+            lastAppliedContentScale = scale
         }
 
         let trackingArea = NSTrackingArea(
@@ -108,12 +115,17 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
         fatalError("init(coder:) is not supported")
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     override func makeBackingLayer() -> CALayer {
         let metalLayer = CAMetalLayer()
         metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
         metalLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         if let displayId, let surface = ghosttySurface {
             ghostty_surface_set_display_id(surface, displayId)
+            lastAppliedDisplayId = displayId
         }
         return metalLayer
     }
@@ -125,8 +137,10 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: nil)
         guard let window else { return }
-        updateContentScale()
+        updateDisplayState()
 
         NotificationCenter.default.addObserver(
             self,
@@ -134,24 +148,73 @@ final class GhosttySurfaceView: NSView, @preconcurrency NSTextInputClient {
             name: NSWindow.didChangeBackingPropertiesNotification,
             object: window
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChangeScreen(_:)),
+            name: NSWindow.didChangeScreenNotification,
+            object: window
+        )
     }
 
     @objc private func windowDidChangeBackingProperties(_ notification: Notification) {
-        updateContentScale()
+        updateDisplayState()
     }
 
-    private func updateContentScale() {
+    @objc private func windowDidChangeScreen(_ notification: Notification) {
+        updateDisplayState()
+    }
+
+    private func updateDisplayState() {
         guard let metalLayer = layer as? CAMetalLayer, let surface = ghosttySurface else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
         metalLayer.contentsScale = scale
-        ghostty_surface_set_content_scale(surface, scale, scale)
+
+        if let displayId, displayId != lastAppliedDisplayId {
+            ghostty_surface_set_display_id(surface, displayId)
+            lastAppliedDisplayId = displayId
+        }
+
+        if lastAppliedContentScale != scale {
+            ghostty_surface_set_content_scale(surface, scale, scale)
+            lastAppliedContentScale = scale
+        }
+
+        syncGhosttySurfaceSize(backingScale: scale)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        syncGhosttySurfaceSize()
+    }
+
+    func syncGhosttySurfaceSize(backingScale explicitBackingScale: CGFloat? = nil) {
+        let scale = explicitBackingScale ?? window?.backingScaleFactor ?? 1.0
+        onSurfaceSizeSyncForTesting?(frame.size, scale)
+
+        let surfaceSize: ghostty_surface_size_s
+        if let surfaceSizeProviderForTesting {
+            surfaceSize = surfaceSizeProviderForTesting()
+        } else {
+            guard let surface = ghosttySurface else { return }
+            surfaceSize = ghostty_surface_size(surface)
+        }
+
+        let pixelSize = GhosttySurfacePixelSizeNormalizer.normalize(
+            pointSize: frame.size,
+            backingScale: scale,
+            cellMetrics: GhosttySurfaceCellMetrics(surfaceSize: surfaceSize)
+        )
+        guard let pixelSize, pixelSize != lastAppliedSurfacePixelSize else { return }
+
+        if let surfaceSizeApplyForTesting {
+            surfaceSizeApplyForTesting(pixelSize)
+            lastAppliedSurfacePixelSize = pixelSize
+            return
+        }
+
         guard let surface = ghosttySurface else { return }
-        let scale = window?.backingScaleFactor ?? 1.0
-        ghostty_surface_set_size(surface, UInt32(newSize.width * scale), UInt32(newSize.height * scale))
+        ghostty_surface_set_size(surface, pixelSize.widthPx, pixelSize.heightPx)
+        lastAppliedSurfacePixelSize = pixelSize
     }
 
     override func becomeFirstResponder() -> Bool {
