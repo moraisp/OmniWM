@@ -53,10 +53,7 @@ struct NiriCreateFocusTraceEvent: Equatable {
 }
 
 struct WindowCreatePlacementContext: Equatable {
-    let windowId: UInt32
-    let spaceId: UInt64
-    let originWorkspaceId: WorkspaceDescriptor.ID?
-    let originMonitorId: Monitor.ID?
+    let monitorHintId: Monitor.ID?
     let createdAt: Date
 }
 
@@ -2287,20 +2284,17 @@ final class AXEventHandler: CGSEventDelegate {
             return
         }
 
-        let origin = resolveCreatePlacementOrigin(spaceId: spaceId, controller: controller)
+        let monitorHintId = resolveCreatePlacementMonitorHint(spaceId: spaceId, controller: controller)
         createPlacementContextsByWindowId[windowId] = WindowCreatePlacementContext(
-            windowId: windowId,
-            spaceId: spaceId,
-            originWorkspaceId: origin.workspaceId,
-            originMonitorId: origin.monitorId,
+            monitorHintId: monitorHintId,
             createdAt: Date()
         )
     }
 
-    private func resolveCreatePlacementOrigin(
+    private func resolveCreatePlacementMonitorHint(
         spaceId: UInt64,
         controller: WMController
-    ) -> (workspaceId: WorkspaceDescriptor.ID?, monitorId: Monitor.ID?) {
+    ) -> Monitor.ID? {
         let monitors = controller.workspaceManager.monitors
         let displayId: CGDirectDisplayID?
         if let spaceDisplayResolver {
@@ -2311,24 +2305,16 @@ final class AXEventHandler: CGSEventDelegate {
         guard let displayId,
               let monitor = monitors.first(where: { $0.displayId == displayId })
         else {
-            return fallbackCreatePlacementOrigin(controller: controller)
+            return fallbackCreatePlacementMonitorHint(controller: controller)
         }
 
-        return (
-            controller.workspaceManager.currentActiveWorkspace(on: monitor.id)?.id ??
-                controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id,
-            monitor.id
-        )
+        return monitor.id
     }
 
-    private func fallbackCreatePlacementOrigin(
+    private func fallbackCreatePlacementMonitorHint(
         controller: WMController
-    ) -> (workspaceId: WorkspaceDescriptor.ID?, monitorId: Monitor.ID?) {
-        let monitor = controller.monitorForInteraction()
-        let workspaceId = monitor.flatMap {
-            controller.workspaceManager.activeWorkspaceOrFirst(on: $0.id)?.id
-        } ?? controller.activeWorkspace()?.id
-        return (workspaceId, monitor?.id)
+    ) -> Monitor.ID? {
+        controller.monitorForInteraction()?.id
     }
 
     private func discardCreatePlacementContext(windowId: UInt32) {

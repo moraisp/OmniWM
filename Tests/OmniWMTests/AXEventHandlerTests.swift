@@ -581,12 +581,11 @@ private func waitUntilAXEventTest(
         }
     }
 
-    @Test @MainActor func createdWindowRetryUsesCreateOriginWorkspaceAfterActiveWorkspaceChanges() async {
+    @Test @MainActor func createdWindowRetryUsesFreshMonitorWorkspaceAfterActiveWorkspaceChanges() async {
         await withAXFrameProviderIsolationForTests {
             let controller = makeAXEventTestController()
             var axWindowRefReady = false
             guard let monitor = controller.monitorForInteraction(),
-                  let originWorkspaceId = controller.activeWorkspace()?.id,
                   let laterWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false)
             else {
                 Issue.record("Missing workspace fixture")
@@ -621,15 +620,14 @@ private func waitUntilAXEventTest(
 
             #expect(controller.activeWorkspace()?.id == laterWorkspaceId)
             #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 818)?
-                .workspaceId == originWorkspaceId)
+                .workspaceId == laterWorkspaceId)
         }
     }
 
-    @Test @MainActor func createdWindowStabilizationUsesCreateOriginWorkspaceAfterActiveWorkspaceChanges() async {
+    @Test @MainActor func createdWindowStabilizationUsesFreshMonitorWorkspaceAfterActiveWorkspaceChanges() async {
         let controller = makeAXEventTestController()
         var factsReady = false
         guard let monitor = controller.monitorForInteraction(),
-              let originWorkspaceId = controller.activeWorkspace()?.id,
               let laterWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false)
         else {
             Issue.record("Missing workspace fixture")
@@ -667,7 +665,7 @@ private func waitUntilAXEventTest(
         }
 
         #expect(controller.activeWorkspace()?.id == laterWorkspaceId)
-        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 819)?.workspaceId == originWorkspaceId)
+        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 819)?.workspaceId == laterWorkspaceId)
         #expect(controller.axEventHandler.pendingCreatePlacementContext(for: 819) == nil)
     }
 
@@ -2821,10 +2819,9 @@ private func waitUntilAXEventTest(
         #expect(lastAppliedBorderWindowId(on: controller) == 816)
     }
 
-    @Test @MainActor func deferredCreatedWindowsReplayExactlyOnceWhenDiscoveryEnds() async {
+    @Test @MainActor func deferredCreatedWindowsReplayOnceUsingFreshMonitorWorkspaceWhenDiscoveryEnds() async {
         let controller = makeAXEventTestController()
         guard let monitor = controller.monitorForInteraction(),
-              let workspaceId = controller.activeWorkspace()?.id,
               let laterWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false)
         else {
             Issue.record("Missing active workspace")
@@ -2859,16 +2856,15 @@ private func waitUntilAXEventTest(
         await controller.axEventHandler.drainDeferredCreatedWindows()
         await controller.axEventHandler.drainDeferredCreatedWindows()
 
-        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 821)?.workspaceId == workspaceId)
+        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 821)?.workspaceId == laterWorkspaceId)
         #expect(controller.workspaceManager.allEntries().filter { $0.windowId == 821 }.count == 1)
         #expect(subscriptions == [[821]])
     }
 
-    @Test @MainActor func fullRescanUsesPendingCreateOriginForUntrackedWindow() async {
+    @Test @MainActor func fullRescanUsesPendingCreateMonitorForUntrackedWindow() async {
         let controller = makeAXEventTestController()
         defer { controller.axManager.fullRescanEnumerationOverrideForTests = nil }
         guard let monitor = controller.monitorForInteraction(),
-              let originWorkspaceId = controller.activeWorkspace()?.id,
               let laterWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false)
         else {
             Issue.record("Missing workspace fixture")
@@ -2906,7 +2902,7 @@ private func waitUntilAXEventTest(
 
         #expect(controller.activeWorkspace()?.id == laterWorkspaceId)
         #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: Int(windowId))?
-            .workspaceId == originWorkspaceId)
+            .workspaceId == laterWorkspaceId)
         #expect(controller.axEventHandler.pendingCreatePlacementContext(for: Int(windowId)) == nil)
     }
 
@@ -5017,7 +5013,7 @@ private func waitUntilAXEventTest(
         #expect(relayoutReasons == [.axWindowCreated])
     }
 
-    @Test @MainActor func createdWindowUsesNativeSpaceWorkspaceWhenInteractionMonitorIsStale() async {
+    @Test @MainActor func createdWindowUsesNativeDisplayMonitorWhenInteractionMonitorIsStale() async {
         let controller = makeAXEventTestController(
             workspaceConfigurations: [
                 WorkspaceConfiguration(name: "1", monitorAssignment: .main),
@@ -5067,10 +5063,59 @@ private func waitUntilAXEventTest(
             .workspaceId == secondaryWorkspaceId)
     }
 
-    @Test @MainActor func createdWindowFallsBackToInteractionWorkspaceWhenNativeSpaceIsUnresolved() async {
+    @Test @MainActor func createdWindowUsesFreshMonitorWorkspaceWhenNativeDisplayResolutionSawStaleWorkspace() async {
+        let controller = makeAXEventTestController()
+        let monitor = makeAXEventTestMonitor()
+        controller.workspaceManager.applyMonitorConfigurationChange([monitor])
+
+        guard let staleWorkspaceId = controller.workspaceManager.workspaceId(for: "1", createIfMissing: false),
+              let freshWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false)
+        else {
+            Issue.record("Missing workspace fixture")
+            return
+        }
+
+        #expect(controller.workspaceManager.setActiveWorkspace(staleWorkspaceId, on: monitor.id))
+
+        let createdWindowId: UInt32 = 896
+        var refreshedWorkspaceBeforeAdmission = false
+        controller.axEventHandler.spaceDisplayResolver = { spaceId, _ in
+            spaceId == 90 ? monitor.displayId : nil
+        }
+        controller.axEventHandler.windowInfoProvider = { windowId in
+            guard windowId == createdWindowId else { return nil }
+            refreshedWorkspaceBeforeAdmission = controller.workspaceManager.setActiveWorkspace(
+                freshWorkspaceId,
+                on: monitor.id
+            )
+            return WindowServerInfo(id: windowId, pid: getpid(), level: 0, frame: .zero)
+        }
+        controller.axEventHandler.axWindowRefProvider = { windowId, candidatePid in
+            guard windowId == createdWindowId, candidatePid == getpid() else { return nil }
+            return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(windowId))
+        }
+        controller.axEventHandler.windowFactsProvider = { _, _ in
+            makeAXEventWindowRuleFacts(bundleId: "com.example.native-display-fresh-workspace")
+        }
+
+        controller.axEventHandler.cgsEventObserver(
+            CGSEventObserver.shared,
+            didReceive: .created(windowId: createdWindowId, spaceId: 90)
+        )
+        await waitUntilAXEventTest {
+            controller.workspaceManager.entry(forPid: getpid(), windowId: Int(createdWindowId)) != nil
+        }
+
+        #expect(refreshedWorkspaceBeforeAdmission)
+        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: Int(createdWindowId))?
+            .workspaceId == freshWorkspaceId)
+    }
+
+    @Test @MainActor func createdWindowUsesFreshInteractionWorkspaceWhenNativeSpaceIsUnresolved() async {
         let controller = makeAXEventTestController(
             workspaceConfigurations: [
                 WorkspaceConfiguration(name: "1", monitorAssignment: .main),
+                WorkspaceConfiguration(name: "2", monitorAssignment: .main),
                 WorkspaceConfiguration(name: "6", monitorAssignment: .secondary)
             ]
         )
@@ -5079,6 +5124,7 @@ private func waitUntilAXEventTest(
         controller.workspaceManager.applyMonitorConfigurationChange([primaryMonitor, secondaryMonitor])
 
         guard let primaryWorkspaceId = controller.workspaceManager.workspaceId(for: "1", createIfMissing: false),
+              let freshPrimaryWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false),
               let secondaryWorkspaceId = controller.workspaceManager.workspaceId(for: "6", createIfMissing: false)
         else {
             Issue.record("Missing multi-monitor workspace fixture")
@@ -5093,6 +5139,7 @@ private func waitUntilAXEventTest(
         controller.axEventHandler.spaceDisplayResolver = { _, _ in nil }
         controller.axEventHandler.windowInfoProvider = { windowId in
             guard windowId == createdWindowId else { return nil }
+            _ = controller.workspaceManager.setActiveWorkspace(freshPrimaryWorkspaceId, on: primaryMonitor.id)
             return WindowServerInfo(id: windowId, pid: getpid(), level: 0, frame: .zero)
         }
         controller.axEventHandler.axWindowRefProvider = { windowId, candidatePid in
@@ -5112,10 +5159,10 @@ private func waitUntilAXEventTest(
         }
 
         #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: Int(createdWindowId))?
-            .workspaceId == primaryWorkspaceId)
+            .workspaceId == freshPrimaryWorkspaceId)
     }
 
-    @Test @MainActor func samePidCreateWithoutRuleUsesCreateOriginWorkspace() async {
+    @Test @MainActor func samePidCreateWithoutRuleUsesActiveWorkspace() async {
         let bundleId = "com.example.same-pid-origin"
         let controller = makeAXEventTestController(
             trackedBundleId: bundleId,
@@ -5126,7 +5173,7 @@ private func waitUntilAXEventTest(
             ]
         )
 
-        guard let originWorkspaceId = controller.activeWorkspace()?.id,
+        guard let activeWorkspaceId = controller.activeWorkspace()?.id,
               let siblingWorkspaceId = controller.workspaceManager.workspaceId(for: "3", createIfMissing: false)
         else {
             Issue.record("Missing configured workspaces")
@@ -5163,7 +5210,7 @@ private func waitUntilAXEventTest(
         }
 
         #expect(controller.workspaceManager.entry(forPid: pid, windowId: Int(createdWindowId))?
-            .workspaceId == originWorkspaceId)
+            .workspaceId == activeWorkspaceId)
     }
 
     @Test @MainActor func childCreateUsesTrackedParentWorkspaceDespiteAssignRule() async {

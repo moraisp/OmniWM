@@ -923,10 +923,10 @@ final class WMController {
         windowFrame: CGRect?,
         fallbackWorkspaceId: WorkspaceDescriptor.ID?
     ) -> WorkspaceDescriptor.ID {
-        if let workspaceId = createPlacementContext?.originWorkspaceId,
-           workspaceManager.descriptor(for: workspaceId) != nil
+        if let monitorId = createPlacementContext?.monitorHintId,
+           let workspace = workspaceManager.activeWorkspaceOrFirst(on: monitorId)
         {
-            return workspaceId
+            return workspace.id
         }
 
         if let frame = windowFrame ?? AXWindowService.framePreferFast(axRef) {
