@@ -150,6 +150,7 @@ func resetSharedControllerStateForTests() {
     SponsorsWindowController.shared.windowForTests?.close()
     UpdateWindowController.shared.windowForTests?.close()
     OwnedWindowRegistry.shared.resetForTests()
+    NativeFullscreenPlaceholderManager.materializesWindowsForTests = false
 
     AppAXContext.contextFactoryForTests = contextFactory
     AXWindowService.axWindowRefProviderForTests = axWindowRefProvider

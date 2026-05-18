@@ -197,7 +197,11 @@ final class ServiceLifecycleManager {
     func handleAppTerminated(pid: pid_t) {
         guard let controller else { return }
         controller.axEventHandler.cleanupFocusStateForTerminatedApp(pid: pid)
+        let removedTokens = controller.workspaceManager.entries(forPid: pid).map(\.token)
         let affectedWorkspaces = controller.workspaceManager.removeWindowsForApp(pid: pid)
+        for token in removedTokens {
+            controller.nativeFullscreenPlaceholderManager.remove(token)
+        }
         for workspaceId in affectedWorkspaces {
             if let monitorId = controller.workspaceManager.monitorId(for: workspaceId),
                controller.workspaceManager.activeWorkspace(on: monitorId)?.id == workspaceId
@@ -337,6 +341,7 @@ final class ServiceLifecycleManager {
         controller.axEventHandler.cleanup()
 
         controller.tabbedOverlayManager.removeAll()
+        controller.nativeFullscreenPlaceholderManager.removeAll()
         controller.borderManager.cleanup()
         controller.cleanupUIOnStop()
 

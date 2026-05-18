@@ -395,7 +395,6 @@ final class WindowActionHandler {
     func navigateToWindowInternal(token: WindowToken, workspaceId: WorkspaceDescriptor.ID) -> Bool {
         guard let controller else { return false }
         guard let engine = controller.niriEngine else { return false }
-        guard !controller.isManagedWindowSuspendedForNativeFullscreen(token) else { return false }
 
         let currentWsId = controller.activeWorkspace()?.id
 

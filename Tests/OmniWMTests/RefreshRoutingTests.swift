@@ -62,6 +62,24 @@ private func makeRefreshTestWindowFacts(
     )
 }
 
+private func makeRefreshFrameWriteResult(
+    targetFrame: CGRect,
+    currentFrameHint: CGRect?,
+    observedFrame: CGRect?
+) -> AXFrameWriteResult {
+    AXFrameWriteResult(
+        targetFrame: targetFrame,
+        observedFrame: observedFrame,
+        writeOrder: AXWindowService.frameWriteOrder(
+            currentFrame: currentFrameHint,
+            targetFrame: targetFrame
+        ),
+        sizeError: .success,
+        positionError: .success,
+        failureReason: nil
+    )
+}
+
 @MainActor
 private func makeRefreshTestController(
     windowFocusOperations: WindowFocusOperations? = nil,
@@ -70,6 +88,8 @@ private func makeRefreshTestController(
         WorkspaceConfiguration(name: "2", monitorAssignment: .main)
     ]
 ) -> WMController {
+    resetSharedControllerStateForTests()
+    NativeFullscreenPlaceholderManager.materializesWindowsForTests = false
     let operations = windowFocusOperations ?? WindowFocusOperations(
         activateApp: { _ in },
         focusSpecificWindow: { _, _, _ in },
@@ -95,6 +115,7 @@ private func cleanupRefreshTestController(_ controller: WMController) {
     controller.layoutRefreshController.resetDebugState()
     controller.layoutRefreshController.resetState()
     controller.resetWorkspaceBarRefreshDebugStateForTests()
+    controller.nativeFullscreenPlaceholderManager.removeAll()
     controller.axManager.currentWindowsAsyncOverride = nil
     controller.axManager.fullRescanEnumerationOverrideForTests = nil
     controller.axManager.frameApplyOverrideForTests = nil
@@ -1767,6 +1788,7 @@ private func syncNiriWorkspaceStatesForRefreshTests(
 
     @Test @MainActor func activeSpaceChangeDoesNotFrameWriteNativeFullscreenSuspendedWindowInNiri() async {
         let controller = makeRefreshTestController()
+        defer { controller.nativeFullscreenPlaceholderManager.removeAll() }
         let lifecycleManager = ServiceLifecycleManager(controller: controller)
         controller.axManager.currentWindowsAsyncOverride = { [] }
         controller.enableNiriLayout(maxWindowsPerColumn: 1)
@@ -1791,158 +1813,231 @@ private func syncNiriWorkspaceStatesForRefreshTests(
         await waitForRefreshWork(on: controller)
 
         #expect(controller.axManager.lastAppliedFrame(for: 2601) == nil)
+        #expect(controller.nativeFullscreenPlaceholderManager.snapshotForTests()[token] != nil)
         #expect(controller.workspaceManager.entry(for: token) != nil)
         #expect(controller.workspaceManager.layoutReason(for: token) == .nativeFullscreen)
     }
 
-    @Test @MainActor func nativeFullscreenExitRestoresPriorManagedFrameInNiri() async {
+    @Test @MainActor func hideInactiveWorkspacesSkipsNativeFullscreenRealWindowMoves() {
         let controller = makeRefreshTestController()
         defer { cleanupRefreshTestController(controller) }
-        let visibleWindows = VisibleWindowsStore([
-            (makeRefreshTestWindow(windowId: 2611), getpid(), 2611),
-            (makeRefreshTestWindow(windowId: 2612), getpid(), 2612)
-        ])
-        configureNativeFullscreenTestState(on: controller, visibleWindows: visibleWindows)
-        controller.enableNiriLayout(maxWindowsPerColumn: 1)
-        await waitForRefreshWork(on: controller)
-
-        controller.layoutRefreshController.requestFullRescan(reason: .startup)
-        await waitForSettledRefreshWork(on: controller)
-
-        guard let workspaceId = controller.activeWorkspace()?.id else {
-            Issue.record("Missing active workspace")
-            return
-        }
-        let targetToken = WindowToken(pid: getpid(), windowId: 2612)
-        guard let engine = controller.niriEngine,
-              let originalNode = engine.findNode(for: targetToken),
-              let originalColumn = engine.column(of: originalNode),
-              let originalColumnIndex = engine.columnIndex(of: originalColumn, in: workspaceId)
+        guard let workspaceOne = controller.workspaceManager.workspaceId(for: "1", createIfMissing: false),
+              let workspaceTwo = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false),
+              let monitor = controller.workspaceManager.monitor(for: workspaceTwo)
         else {
-            Issue.record("Missing original Niri placement state")
-            return
-        }
-        guard let originalFrame = controller.axManager.lastAppliedFrame(for: 2612) else {
-            Issue.record("Missing original applied frame")
-            return
-        }
-        let originalColumnWidth = originalColumn.cachedWidth
-
-        _ = controller.workspaceManager.rememberFocus(targetToken, in: workspaceId)
-        controller.workspaceManager.setLayoutReason(.nativeFullscreen, for: targetToken)
-        _ = controller.workspaceManager.enterNonManagedFocus(appFullscreen: true)
-
-        visibleWindows.value = [
-            (makeRefreshTestWindow(windowId: 2611), getpid(), 2611)
-        ]
-        controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
-        await waitForSettledRefreshWork(on: controller)
-
-        visibleWindows.value = [
-            (makeRefreshTestWindow(windowId: 2611), getpid(), 2611),
-            (makeRefreshTestWindow(windowId: 2612), getpid(), 2612)
-        ]
-        controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
-        await waitForSettledRefreshWork(on: controller)
-
-        guard let restoredNode = engine.findNode(for: targetToken),
-              let restoredColumn = engine.column(of: restoredNode),
-              let restoredColumnIndex = engine.columnIndex(of: restoredColumn, in: workspaceId),
-              let restoredFrame = controller.axManager.lastAppliedFrame(for: 2612)
-        else {
-            Issue.record("Missing restored Niri placement state")
+            Issue.record("Missing inactive workspace fixture")
             return
         }
 
-        #expect(controller.workspaceManager.layoutReason(for: targetToken) == .standard)
-        #expect(restoredNode.id == originalNode.id)
-        #expect(restoredColumnIndex == originalColumnIndex)
-        #expect(abs(restoredColumn.cachedWidth - originalColumnWidth) < 0.5)
-        #expect(abs(restoredFrame.origin.x - originalFrame.origin.x) <= 6.0)
-        #expect(abs(restoredFrame.origin.y - originalFrame.origin.y) < 0.5)
-        #expect(abs(restoredFrame.size.width - originalFrame.size.width) < 0.5)
-        #expect(abs(restoredFrame.size.height - originalFrame.size.height) < 0.5)
+        let token = controller.workspaceManager.addWindow(
+            makeRefreshTestWindow(windowId: 2602),
+            pid: getpid(),
+            windowId: 2602,
+            to: workspaceTwo
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceTwo)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: token,
+                    workspaceId: workspaceTwo,
+                    frame: CGRect(x: 200, y: 160, width: 600, height: 420),
+                    selected: false,
+                    appName: "Inactive Full Screen",
+                    icon: nil
+                )
+            ],
+            in: workspaceTwo
+        )
+
+        let previousFastFrameProvider = AXWindowService.fastFrameProviderForTests
+        let previousSetFrameProvider = AXWindowService.setFrameResultProviderForTests
+        let nativeFrame = CGRect(x: monitor.visibleFrame.minX + 40, y: monitor.visibleFrame.minY + 50, width: 620, height: 430)
+        var frameWrites: [CGRect] = []
+        AXWindowService.fastFrameProviderForTests = { axRef in
+            if axRef.windowId == token.windowId {
+                return nativeFrame
+            }
+            return previousFastFrameProvider?(axRef)
+        }
+        AXWindowService.setFrameResultProviderForTests = { axRef, frame, currentFrameHint in
+            if axRef.windowId == token.windowId {
+                frameWrites.append(frame)
+            }
+            return previousSetFrameProvider?(axRef, frame, currentFrameHint) ?? makeRefreshFrameWriteResult(
+                targetFrame: frame,
+                currentFrameHint: currentFrameHint,
+                observedFrame: frame
+            )
+        }
+        defer {
+            AXWindowService.fastFrameProviderForTests = previousFastFrameProvider
+            AXWindowService.setFrameResultProviderForTests = previousSetFrameProvider
+        }
+
+        controller.layoutRefreshController.hideInactiveWorkspaces(activeWorkspaceIds: [workspaceOne])
+
+        #expect(frameWrites.isEmpty)
+        #expect(controller.nativeFullscreenPlaceholderManager.snapshotForTests()[token] == nil)
+        #expect(controller.axManager.inactiveWorkspaceWindowIds.contains(token.windowId))
+        #expect(controller.workspaceManager.layoutReason(for: token) == .nativeFullscreen)
+    }
+
+    @Test @MainActor func nativeFullscreenExitRestoresPriorManagedFrameInNiri() async {
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeRefreshTestController()
+            defer { cleanupRefreshTestController(controller) }
+            controller.motionPolicy.animationsEnabled = false
+            let visibleWindows = VisibleWindowsStore([
+                (makeRefreshTestWindow(windowId: 2611), getpid(), 2611),
+                (makeRefreshTestWindow(windowId: 2612), getpid(), 2612)
+            ])
+            configureNativeFullscreenTestState(on: controller, visibleWindows: visibleWindows)
+            controller.enableNiriLayout(maxWindowsPerColumn: 1)
+            await waitForRefreshWork(on: controller)
+
+            controller.layoutRefreshController.requestFullRescan(reason: .startup)
+            await waitForSettledRefreshWork(on: controller)
+
+            guard let workspaceId = controller.activeWorkspace()?.id else {
+                Issue.record("Missing active workspace")
+                return
+            }
+            let targetToken = WindowToken(pid: getpid(), windowId: 2612)
+            guard let engine = controller.niriEngine,
+                  let originalNode = engine.findNode(for: targetToken),
+                  let originalColumn = engine.column(of: originalNode),
+                  let originalColumnIndex = engine.columnIndex(of: originalColumn, in: workspaceId)
+            else {
+                Issue.record("Missing original Niri placement state")
+                return
+            }
+            guard let originalFrame = controller.axManager.lastAppliedFrame(for: 2612) else {
+                Issue.record("Missing original applied frame")
+                return
+            }
+            let originalColumnWidth = originalColumn.cachedWidth
+
+            _ = controller.workspaceManager.rememberFocus(targetToken, in: workspaceId)
+            controller.workspaceManager.setLayoutReason(.nativeFullscreen, for: targetToken)
+            _ = controller.workspaceManager.enterNonManagedFocus(appFullscreen: true)
+
+            visibleWindows.value = [
+                (makeRefreshTestWindow(windowId: 2611), getpid(), 2611)
+            ]
+            controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
+            await waitForSettledRefreshWork(on: controller)
+
+            visibleWindows.value = [
+                (makeRefreshTestWindow(windowId: 2611), getpid(), 2611),
+                (makeRefreshTestWindow(windowId: 2612), getpid(), 2612)
+            ]
+            controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
+            await waitForSettledRefreshWork(on: controller)
+
+            guard let restoredNode = engine.findNode(for: targetToken),
+                  let restoredColumn = engine.column(of: restoredNode),
+                  let restoredColumnIndex = engine.columnIndex(of: restoredColumn, in: workspaceId),
+                  let restoredFrame = controller.axManager.lastAppliedFrame(for: 2612)
+            else {
+                Issue.record("Missing restored Niri placement state")
+                return
+            }
+
+            #expect(controller.workspaceManager.layoutReason(for: targetToken) == .standard)
+            #expect(restoredNode.id == originalNode.id)
+            #expect(restoredColumnIndex == originalColumnIndex)
+            #expect(abs(restoredColumn.cachedWidth - originalColumnWidth) < 0.5)
+            #expect(abs(restoredFrame.origin.x - originalFrame.origin.x) <= 6.0)
+            #expect(abs(restoredFrame.origin.y - originalFrame.origin.y) < 0.5)
+            #expect(abs(restoredFrame.size.width - originalFrame.size.width) < 0.5)
+            #expect(abs(restoredFrame.size.height - originalFrame.size.height) < 0.5)
+        }
     }
 
     @Test @MainActor func nativeFullscreenSameWindowIdRestoreIgnoresFreshLifecycleModeReevaluationInNiri() async {
-        let controller = makeRefreshTestController()
-        defer { cleanupRefreshTestController(controller) }
-        let visibleWindows = VisibleWindowsStore([
-            (makeRefreshTestWindow(windowId: 2671), getpid(), 2671),
-            (makeRefreshTestWindow(windowId: 2672), getpid(), 2672)
-        ])
-        configureNativeFullscreenTestState(on: controller, visibleWindows: visibleWindows)
-        controller.enableNiriLayout(maxWindowsPerColumn: 1)
-        await waitForRefreshWork(on: controller)
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeRefreshTestController()
+            defer { cleanupRefreshTestController(controller) }
+            controller.motionPolicy.animationsEnabled = false
+            let visibleWindows = VisibleWindowsStore([
+                (makeRefreshTestWindow(windowId: 2671), getpid(), 2671),
+                (makeRefreshTestWindow(windowId: 2672), getpid(), 2672)
+            ])
+            configureNativeFullscreenTestState(on: controller, visibleWindows: visibleWindows)
+            controller.enableNiriLayout(maxWindowsPerColumn: 1)
+            await waitForRefreshWork(on: controller)
 
-        controller.layoutRefreshController.requestFullRescan(reason: .startup)
-        await waitForSettledRefreshWork(on: controller)
+            controller.layoutRefreshController.requestFullRescan(reason: .startup)
+            await waitForSettledRefreshWork(on: controller)
 
-        guard let workspaceId = controller.activeWorkspace()?.id else {
-            Issue.record("Missing active workspace")
-            return
-        }
-        let targetToken = WindowToken(pid: getpid(), windowId: 2672)
-        guard let engine = controller.niriEngine,
-              let originalNode = engine.findNode(for: targetToken),
-              let originalColumn = engine.column(of: originalNode),
-              let originalColumnIndex = engine.columnIndex(of: originalColumn, in: workspaceId)
-        else {
-            Issue.record("Missing original Niri reevaluation placement state")
-            return
-        }
-        guard let originalFrame = controller.axManager.lastAppliedFrame(for: 2672) else {
-            Issue.record("Missing original Niri reevaluation frame")
-            return
-        }
-        let originalColumnWidth = originalColumn.cachedWidth
-
-        _ = controller.workspaceManager.rememberFocus(targetToken, in: workspaceId)
-        controller.workspaceManager.setLayoutReason(.nativeFullscreen, for: targetToken)
-        _ = controller.workspaceManager.enterNonManagedFocus(appFullscreen: true)
-
-        visibleWindows.value = [
-            (makeRefreshTestWindow(windowId: 2671), getpid(), 2671)
-        ]
-        controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
-        await waitForSettledRefreshWork(on: controller)
-
-        controller.axEventHandler.windowFactsProvider = { axRef, _ in
-            if axRef.windowId == targetToken.windowId {
-                return makeRefreshTestWindowFacts(
-                    title: "Same window appears floating",
-                    hasFullscreenButton: false,
-                    fullscreenButtonEnabled: false
-                )
+            guard let workspaceId = controller.activeWorkspace()?.id else {
+                Issue.record("Missing active workspace")
+                return
             }
-            return makeRefreshTestWindowFacts()
+            let targetToken = WindowToken(pid: getpid(), windowId: 2672)
+            guard let engine = controller.niriEngine,
+                  let originalNode = engine.findNode(for: targetToken),
+                  let originalColumn = engine.column(of: originalNode),
+                  let originalColumnIndex = engine.columnIndex(of: originalColumn, in: workspaceId)
+            else {
+                Issue.record("Missing original Niri reevaluation placement state")
+                return
+            }
+            guard let originalFrame = controller.axManager.lastAppliedFrame(for: 2672) else {
+                Issue.record("Missing original Niri reevaluation frame")
+                return
+            }
+            let originalColumnWidth = originalColumn.cachedWidth
+
+            _ = controller.workspaceManager.rememberFocus(targetToken, in: workspaceId)
+            controller.workspaceManager.setLayoutReason(.nativeFullscreen, for: targetToken)
+            _ = controller.workspaceManager.enterNonManagedFocus(appFullscreen: true)
+
+            visibleWindows.value = [
+                (makeRefreshTestWindow(windowId: 2671), getpid(), 2671)
+            ]
+            controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
+            await waitForSettledRefreshWork(on: controller)
+
+            controller.axEventHandler.windowFactsProvider = { axRef, _ in
+                if axRef.windowId == targetToken.windowId {
+                    return makeRefreshTestWindowFacts(
+                        title: "Same window appears floating",
+                        hasFullscreenButton: false,
+                        fullscreenButtonEnabled: false
+                    )
+                }
+                return makeRefreshTestWindowFacts()
+            }
+
+            visibleWindows.value = [
+                (makeRefreshTestWindow(windowId: 2671), getpid(), 2671),
+                (makeRefreshTestWindow(windowId: 2672), getpid(), 2672)
+            ]
+            controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
+            await waitForSettledRefreshWork(on: controller)
+
+            guard let restoredNode = engine.findNode(for: targetToken),
+                  let restoredColumn = engine.column(of: restoredNode),
+                  let restoredColumnIndex = engine.columnIndex(of: restoredColumn, in: workspaceId),
+                  let restoredFrame = controller.axManager.lastAppliedFrame(for: 2672)
+            else {
+                Issue.record("Missing restored Niri reevaluation placement state")
+                return
+            }
+
+            #expect(controller.workspaceManager.layoutReason(for: targetToken) == .standard)
+            #expect(controller.workspaceManager.windowMode(for: targetToken) == .tiling)
+            #expect(restoredNode.id == originalNode.id)
+            #expect(restoredColumnIndex == originalColumnIndex)
+            #expect(abs(restoredColumn.cachedWidth - originalColumnWidth) < 0.5)
+            #expect(abs(restoredFrame.origin.x - originalFrame.origin.x) <= 4.0)
+            #expect(abs(restoredFrame.origin.y - originalFrame.origin.y) < 0.5)
+            #expect(abs(restoredFrame.size.width - originalFrame.size.width) < 0.5)
+            #expect(abs(restoredFrame.size.height - originalFrame.size.height) < 0.5)
         }
-
-        visibleWindows.value = [
-            (makeRefreshTestWindow(windowId: 2671), getpid(), 2671),
-            (makeRefreshTestWindow(windowId: 2672), getpid(), 2672)
-        ]
-        controller.layoutRefreshController.requestFullRescan(reason: .activeSpaceChanged)
-        await waitForSettledRefreshWork(on: controller)
-
-        guard let restoredNode = engine.findNode(for: targetToken),
-              let restoredColumn = engine.column(of: restoredNode),
-              let restoredColumnIndex = engine.columnIndex(of: restoredColumn, in: workspaceId),
-              let restoredFrame = controller.axManager.lastAppliedFrame(for: 2672)
-        else {
-            Issue.record("Missing restored Niri reevaluation placement state")
-            return
-        }
-
-        #expect(controller.workspaceManager.layoutReason(for: targetToken) == .standard)
-        #expect(controller.workspaceManager.windowMode(for: targetToken) == .tiling)
-        #expect(restoredNode.id == originalNode.id)
-        #expect(restoredColumnIndex == originalColumnIndex)
-        #expect(abs(restoredColumn.cachedWidth - originalColumnWidth) < 0.5)
-        #expect(abs(restoredFrame.origin.x - originalFrame.origin.x) <= 4.0)
-        #expect(abs(restoredFrame.origin.y - originalFrame.origin.y) < 0.5)
-        #expect(abs(restoredFrame.size.width - originalFrame.size.width) < 0.5)
-        #expect(abs(restoredFrame.size.height - originalFrame.size.height) < 0.5)
     }
 
     @Test @MainActor func nativeFullscreenExitWithReplacementWindowIdPreservesNiriIdentity() async {

@@ -95,6 +95,14 @@ final class WMController {
 
     let tabbedOverlayManager = TabbedColumnOverlayManager()
     @ObservationIgnored
+    lazy var nativeFullscreenPlaceholderManager: NativeFullscreenPlaceholderManager = {
+        let manager = NativeFullscreenPlaceholderManager()
+        manager.onActivate = { [weak self] token in
+            self?.activateNativeFullscreenPlaceholder(token)
+        }
+        return manager
+    }()
+    @ObservationIgnored
     lazy var borderManager: BorderManager = .init()
     @ObservationIgnored
     private lazy var workspaceBarManager: WorkspaceBarManager = .init(motionPolicy: motionPolicy)
@@ -1774,6 +1782,7 @@ final class WMController {
                 if let existingEntry {
                     affectedWorkspaceIds.insert(existingEntry.workspaceId)
                     cleanupScratchpadWindowResourcesIfNeeded(for: token)
+                    nativeFullscreenPlaceholderManager.remove(token)
                     _ = workspaceManager.removeWindow(pid: token.pid, windowId: token.windowId)
                     relayoutNeeded = true
                 } else if evaluation.decision.disposition != .undecided {
@@ -1974,6 +1983,7 @@ final class WMController {
             existingEntry: entry
         ) else {
             cleanupScratchpadWindowResourcesIfNeeded(for: token)
+            nativeFullscreenPlaceholderManager.remove(token)
             _ = workspaceManager.removeWindow(pid: token.pid, windowId: token.windowId)
             layoutRefreshController.requestRelayout(
                 reason: .windowRuleReevaluation,
@@ -2362,6 +2372,37 @@ extension WMController {
         windowFocusOperations.raiseWindow(axRef.element)
     }
 
+    func activateNativeFullscreenPlaceholder(_ token: WindowToken) {
+        guard let entry = workspaceManager.entry(for: token) else { return }
+        guard workspaceManager.layoutReason(for: token) == .nativeFullscreen else { return }
+        guard !isLockScreenActive else { return }
+        if hasStartedServices {
+            guard !isFrontmostAppLockScreen() else { return }
+        }
+        selectNativeFullscreenPlaceholder(entry)
+        performWindowFronting(pid: entry.pid, windowId: entry.windowId, axRef: entry.axRef)
+    }
+
+    @discardableResult
+    private func selectNativeFullscreenPlaceholder(_ entry: WindowModel.Entry) -> Bool {
+        let token = entry.token
+        let changed = workspaceManager.selectNativeFullscreenPlaceholder(
+            token,
+            in: entry.workspaceId,
+            onMonitor: workspaceManager.monitorId(for: entry.workspaceId)
+        )
+        _ = focusBridge.cancelManagedRequest(matching: token, workspaceId: entry.workspaceId)
+        focusBridge.discardPendingFocus(token)
+        borderManager.hideBorder()
+        if changed {
+            layoutRefreshController.requestImmediateRelayout(
+                reason: .appActivationTransition,
+                affectedWorkspaceIds: [entry.workspaceId]
+            )
+        }
+        return changed
+    }
+
     func restoreQuakeTerminalFocus(to target: QuakeTerminalRestoreTarget) {
         switch target {
         case let .managed(token):
@@ -2405,7 +2446,10 @@ extension WMController {
         if hasStartedServices {
             guard !isFrontmostAppLockScreen() else { return }
         }
-        guard !isManagedWindowSuspendedForNativeFullscreen(token) else { return }
+        if isManagedWindowSuspendedForNativeFullscreen(token) {
+            selectNativeFullscreenPlaceholder(entry)
+            return
+        }
 
         _ = workspaceManager.beginManagedFocusRequest(
             token,

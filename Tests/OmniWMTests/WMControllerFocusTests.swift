@@ -510,7 +510,7 @@ private func waitForFocusRefresh(on controller: WMController) async {
         #expect(controller.workspaceManager.isNonManagedFocusActive == true)
     }
 
-    @Test @MainActor func focusWindowIsNoOpForNativeFullscreenSuspendedWindow() {
+    @Test @MainActor func focusWindowSelectsNativeFullscreenPlaceholderWithoutAXFocus() async {
         var events: [FocusOperationEvent] = []
         let operations = WindowFocusOperations(
             activateApp: { pid in
@@ -523,14 +523,72 @@ private func waitForFocusRefresh(on controller: WMController) async {
                 events.append(.raise)
             }
         )
-        let (controller, _, handle) = makeFocusTestController(windowFocusOperations: operations)
+        let (controller, workspaceId, handle) = makeFocusTestController(windowFocusOperations: operations)
         controller.workspaceManager.setLayoutReason(.nativeFullscreen, for: handle)
 
         controller.focusWindow(handle)
+        await waitForFocusRefresh(on: controller)
 
         #expect(events.isEmpty)
         #expect(controller.workspaceManager.pendingFocusedHandle == nil)
-        #expect(controller.workspaceManager.focusedHandle == nil)
+        #expect(controller.workspaceManager.pendingFocusedWorkspaceId == nil)
+        #expect(controller.workspaceManager.focusedHandle == handle)
+        #expect(controller.workspaceManager.lastFocusedHandle(in: workspaceId) == handle)
+        #expect(controller.workspaceManager.isAppFullscreenActive)
+        #expect(controller.workspaceManager.isNonManagedFocusActive)
+    }
+
+    @Test @MainActor func nativeFullscreenPlaceholderActivationSelectsAndFrontsWindowWithoutRestoringLayout() async {
+        var events: [FocusOperationEvent] = []
+        let operations = WindowFocusOperations(
+            activateApp: { pid in
+                events.append(.activate(pid))
+            },
+            focusSpecificWindow: { pid, windowId, _ in
+                events.append(.focus(pid, windowId))
+            },
+            raiseWindow: { _ in
+                events.append(.raise)
+            }
+        )
+        let (controller, workspaceId, handle) = makeFocusTestController(windowFocusOperations: operations)
+        defer { controller.nativeFullscreenPlaceholderManager.removeAll() }
+
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(handle.id, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(handle.id)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: handle.id,
+                    workspaceId: workspaceId,
+                    frame: CGRect(x: 20, y: 20, width: 420, height: 260),
+                    selected: false,
+                    appName: "Focus Test",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+        var relayoutEvents: [(RefreshReason, LayoutRefreshController.RefreshRoute)] = []
+        controller.layoutRefreshController.resetDebugState()
+        controller.layoutRefreshController.debugHooks.onRelayout = { reason, route in
+            relayoutEvents.append((reason, route))
+            return true
+        }
+
+        controller.nativeFullscreenPlaceholderManager.activateForTests(handle.id)
+        await waitForFocusRefresh(on: controller)
+
+        #expect(events == [.activate(getpid()), .focus(getpid(), UInt32(handle.id.windowId)), .raise])
+        #expect(controller.workspaceManager.layoutReason(for: handle.id) == .nativeFullscreen)
+        #expect(controller.workspaceManager.nativeFullscreenRecord(for: handle.id)?.transition == .suspended)
+        #expect(controller.workspaceManager.focusedHandle == handle)
+        #expect(controller.workspaceManager.pendingFocusedHandle == nil)
+        #expect(controller.workspaceManager.isAppFullscreenActive)
+        #expect(controller.workspaceManager.isNonManagedFocusActive)
+        #expect(relayoutEvents.count == 1)
+        #expect(relayoutEvents.first?.0 == .appActivationTransition)
+        #expect(relayoutEvents.first?.1 == .immediateRelayout)
     }
 
     @Test @MainActor func relayoutDoesNotRefocusManagedWindowWhileOwnedUtilityWindowIsFrontmost() async {

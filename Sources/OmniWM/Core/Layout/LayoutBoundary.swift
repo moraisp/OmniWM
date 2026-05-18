@@ -6,6 +6,7 @@ struct LayoutWindowSnapshot {
     let constraints: WindowSizeConstraints
     let hiddenState: WindowModel.HiddenState?
     let layoutReason: LayoutReason
+    let showsNativeFullscreenPlaceholder: Bool
 
     var isNativeFullscreenSuspended: Bool {
         layoutReason == .nativeFullscreen
@@ -86,6 +87,12 @@ struct LayoutFocusedFrame {
     let frame: CGRect
 }
 
+struct NativeFullscreenPlaceholderChange {
+    let token: WindowToken
+    let frame: CGRect
+    let selected: Bool
+}
+
 enum BorderUpdateMode {
     case coordinated
     case direct
@@ -98,6 +105,7 @@ struct WorkspaceLayoutDiff {
     var frameChanges: [LayoutFrameChange] = []
     var visibilityChanges: [LayoutVisibilityChange] = []
     var restoreChanges: [LayoutRestoreChange] = []
+    var nativeFullscreenPlaceholders: [NativeFullscreenPlaceholderChange] = []
     var focusedFrame: LayoutFocusedFrame?
     var borderMode: BorderUpdateMode = .coordinated
 }

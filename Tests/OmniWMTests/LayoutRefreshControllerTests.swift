@@ -56,6 +56,45 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
         #expect(snapshot.workingFrame == CGRect(x: 0, y: 0, width: 1000, height: 748))
     }
 
+    @Test @MainActor func nativeFullscreenWindowSnapshotsSkipFastFrameReadAndUseUnconstrainedFallback() async {
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeLayoutPlanTestController()
+            guard let workspaceId = controller.activeWorkspace()?.id else {
+                Issue.record("Missing active workspace for native fullscreen snapshot test")
+                return
+            }
+
+            let token = controller.workspaceManager.addWindow(
+                makeLayoutPlanTestWindow(windowId: 102),
+                pid: 102,
+                windowId: 102,
+                to: workspaceId
+            )
+            _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+            _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+
+            var fastFrameReads = 0
+            AXWindowService.fastFrameProviderForTests = { window in
+                if window.windowId == token.windowId {
+                    fastFrameReads += 1
+                }
+                return fallbackFastFrameForTests(window)
+            }
+            defer { AXWindowService.fastFrameProviderForTests = nil }
+
+            guard let entry = controller.workspaceManager.entry(for: token) else {
+                Issue.record("Missing native fullscreen entry for snapshot test")
+                return
+            }
+
+            let snapshots = controller.layoutRefreshController.buildWindowSnapshots(for: [entry])
+
+            #expect(fastFrameReads == 0)
+            #expect(snapshots.first?.constraints == .unconstrained)
+            #expect(snapshots.first?.layoutReason == .nativeFullscreen)
+        }
+    }
+
     @Test @MainActor func executeLayoutPlanAppliesFrameDiffAndFocusedBorder() {
         let controller = makeLayoutPlanTestController()
         guard let monitor = controller.workspaceManager.monitors.first,

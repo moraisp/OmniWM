@@ -3756,6 +3756,42 @@ private func makeCenteredCrossMonitorFixture(
         #expect(engine.effectiveSingleWindowAspectRatio(for: monitor.id) == .square)
     }
 
+    @Test @MainActor func nativeFullscreenSuspendedWindowEmitsPlaceholderInsteadOfFrameChangeInNiri() async throws {
+        let controller = makeLayoutPlanTestController()
+        guard let monitor = controller.workspaceManager.monitors.first,
+              let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+        else {
+            Issue.record("Missing monitor or active workspace for Niri native fullscreen placeholder test")
+            return
+        }
+
+        controller.enableNiriLayout(maxWindowsPerColumn: 1)
+        await waitForLayoutPlanRefreshWork(on: controller)
+        controller.syncMonitorsToNiriEngine()
+
+        let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 3901)
+        _ = controller.workspaceManager.setManagedFocus(token, in: workspaceId, onMonitor: monitor.id)
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+
+        let plans = try await controller.niriLayoutHandler.layoutWithNiriEngine(
+            activeWorkspaces: [workspaceId]
+        )
+        guard let plan = plans.first else {
+            Issue.record("Expected a Niri layout plan for native fullscreen placeholder test")
+            return
+        }
+
+        let placeholder = plan.diff.nativeFullscreenPlaceholders.first { $0.token == token }
+        #expect(placeholder != nil)
+        #expect(placeholder?.frame.width ?? 0 > 1)
+        #expect(placeholder?.frame.height ?? 0 > 1)
+        #expect(placeholder?.selected == true)
+        #expect(!plan.diff.frameChanges.contains { $0.token == token })
+        #expect(!hasHideVisibilityChange(plan.diff.visibilityChanges, token: token))
+        #expect(!hasShowVisibilityChange(plan.diff.visibilityChanges, token: token))
+    }
+
     @Test @MainActor func snapshotPlanIncludesViewportPatchAndActivationForNewWindow() async throws {
         let controller = makeLayoutPlanTestController()
         guard let monitor = controller.workspaceManager.monitors.first,

@@ -528,8 +528,9 @@ import QuartzCore
         snapshots.reserveCapacity(entries.count)
 
         for entry in entries {
+            let layoutReason = controller.workspaceManager.layoutReason(for: entry.token)
             let constraints: WindowSizeConstraints
-            if !resolveConstraints {
+            if !resolveConstraints || layoutReason == .nativeFullscreen {
                 constraints = controller.workspaceManager.cachedConstraints(for: entry.token) ?? .unconstrained
             } else {
                 let currentSize = fastFrame(for: entry.token, axRef: entry.axRef)?.size
@@ -558,7 +559,9 @@ import QuartzCore
                     token: entry.token,
                     constraints: mergedConstraints,
                     hiddenState: controller.workspaceManager.hiddenState(for: entry.token),
-                    layoutReason: controller.workspaceManager.layoutReason(for: entry.token)
+                    layoutReason: layoutReason,
+                    showsNativeFullscreenPlaceholder: controller.workspaceManager
+                        .showsNativeFullscreenPlaceholder(for: entry.token)
                 )
             )
         }
@@ -1331,6 +1334,7 @@ import QuartzCore
         }
 
         for token in decisionBasedRemovals {
+            controller.nativeFullscreenPlaceholderManager.remove(token)
             controller.cleanupScratchpadWindowResourcesIfNeeded(for: token)
             _ = controller.workspaceManager.removeWindow(pid: token.pid, windowId: token.windowId)
         }
@@ -2020,6 +2024,9 @@ import QuartzCore
 
         let preferredSides = preferredHideSides(for: controller.workspaceManager.monitors)
         for snapshot in workspaceEntries where !activeWorkspaceIds.contains(snapshot.workspace.id) {
+            for entry in snapshot.entries {
+                controller.nativeFullscreenPlaceholderManager.remove(entry.token)
+            }
             guard let monitor = controller.workspaceManager.monitor(for: snapshot.workspace.id) else { continue }
             let preferredSide = preferredSides[monitor.id] ?? .right
             hideWorkspace(
@@ -2048,6 +2055,9 @@ import QuartzCore
     ) {
         guard let controller else { return }
         for entry in entries {
+            guard controller.workspaceManager.layoutReason(for: entry.token) != .nativeFullscreen else {
+                continue
+            }
             controller.axManager.markWindowInactive(entry.windowId)
             hideWindow(
                 entry,
@@ -2832,6 +2842,29 @@ final class LayoutDiffExecutor {
             resolvedEntries[token] = entry
             return entry
         }
+
+        let placeholderUpdates = diff.nativeFullscreenPlaceholders.compactMap { change -> NativeFullscreenPlaceholderUpdate? in
+            guard let entry = resolveEntry(for: change.token),
+                  entry.workspaceId == plan.workspaceId,
+                  entry.layoutReason == .nativeFullscreen,
+                  controller.workspaceManager.showsNativeFullscreenPlaceholder(for: change.token)
+            else {
+                return nil
+            }
+            let appInfo = controller.appInfoCache.info(for: entry.pid)
+            return NativeFullscreenPlaceholderUpdate(
+                token: change.token,
+                workspaceId: plan.workspaceId,
+                frame: change.frame,
+                selected: change.selected,
+                appName: appInfo?.name,
+                icon: appInfo?.icon
+            )
+        }
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: placeholderUpdates,
+            in: plan.workspaceId
+        )
 
         for change in diff.visibilityChanges {
             switch change {

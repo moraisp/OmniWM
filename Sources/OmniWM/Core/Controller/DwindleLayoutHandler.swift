@@ -348,6 +348,7 @@ import QuartzCore
         let diff = layoutDiff(
             windows: snapshot.windows,
             frames: newFrames,
+            selectedToken: rememberedFocusToken,
             confirmedFocusedToken: snapshot.confirmedFocusedToken,
             directBorderUpdate: animationsActive,
             canRestoreHiddenWorkspaceWindows: snapshot.isActiveWorkspace
@@ -381,6 +382,7 @@ import QuartzCore
         let diff = layoutDiff(
             windows: snapshot.windows,
             frames: frames,
+            selectedToken: snapshot.selectedToken,
             confirmedFocusedToken: snapshot.confirmedFocusedToken,
             directBorderUpdate: true,
             canRestoreHiddenWorkspaceWindows: snapshot.isActiveWorkspace
@@ -414,6 +416,7 @@ import QuartzCore
         let diff = layoutDiff(
             windows: snapshot.windows,
             frames: animatedFrames,
+            selectedToken: snapshot.selectedToken,
             confirmedFocusedToken: snapshot.confirmedFocusedToken,
             directBorderUpdate: animationsActive,
             borderMode: animationsActive ? .direct : .coordinated,
@@ -431,6 +434,7 @@ import QuartzCore
     private func layoutDiff(
         windows: [LayoutWindowSnapshot],
         frames: [WindowToken: CGRect],
+        selectedToken: WindowToken?,
         confirmedFocusedToken: WindowToken?,
         directBorderUpdate: Bool,
         borderMode: BorderUpdateMode? = nil,
@@ -455,6 +459,18 @@ import QuartzCore
 
         for window in windows {
             if window.isNativeFullscreenSuspended {
+                if canRestoreHiddenWorkspaceWindows,
+                   window.showsNativeFullscreenPlaceholder,
+                   let frame = frames[window.token]
+                {
+                    diff.nativeFullscreenPlaceholders.append(
+                        .init(
+                            token: window.token,
+                            frame: frame,
+                            selected: selectedToken == window.token || confirmedFocusedToken == window.token
+                        )
+                    )
+                }
                 continue
             }
             if canRestoreHiddenWorkspaceWindows,

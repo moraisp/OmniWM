@@ -309,6 +309,7 @@ enum NiriWindowMoveResult {
             windows: snapshot.windows,
             frames: frames,
             hiddenHandles: hiddenHandles,
+            selectedToken: selectedWindowToken(state: snapshot.viewportState, engine: engine),
             confirmedFocusedToken: snapshot.confirmedFocusedToken,
             pendingFocusedToken: snapshot.pendingFocusedToken,
             pendingFocusedWorkspaceId: snapshot.pendingFocusedWorkspaceId,
@@ -731,6 +732,7 @@ enum NiriWindowMoveResult {
             windows: snapshot.windows,
             frames: frames,
             hiddenHandles: hiddenHandles,
+            selectedToken: selectedWindowToken(state: state, engine: pass.engine),
             confirmedFocusedToken: snapshot.confirmedFocusedToken,
             pendingFocusedToken: snapshot.pendingFocusedToken,
             pendingFocusedWorkspaceId: snapshot.pendingFocusedWorkspaceId,
@@ -759,6 +761,7 @@ enum NiriWindowMoveResult {
         windows: [LayoutWindowSnapshot],
         frames: [WindowToken: CGRect],
         hiddenHandles: [WindowToken: HideSide],
+        selectedToken: WindowToken?,
         confirmedFocusedToken: WindowToken?,
         pendingFocusedToken: WindowToken?,
         pendingFocusedWorkspaceId: WorkspaceDescriptor.ID?,
@@ -802,6 +805,21 @@ enum NiriWindowMoveResult {
         for window in windows {
             let token = window.token
             if window.isNativeFullscreenSuspended {
+                if canRestoreHiddenWorkspaceWindows,
+                   window.showsNativeFullscreenPlaceholder,
+                   hiddenHandles[token] == nil,
+                   let frame = frames[token]
+                {
+                    diff.nativeFullscreenPlaceholders.append(
+                        .init(
+                            token: token,
+                            frame: frame,
+                            selected: selectedToken == token
+                                || confirmedFocusedToken == token
+                                || pendingFocusedToken == token
+                        )
+                    )
+                }
                 continue
             }
             let previousOffscreenSide = window.hiddenState?.offscreenSide
@@ -854,6 +872,15 @@ enum NiriWindowMoveResult {
         }
 
         return diff
+    }
+
+    private func selectedWindowToken(state: ViewportState, engine: NiriLayoutEngine) -> WindowToken? {
+        guard let selectedNodeId = state.selectedNodeId,
+              let selectedWindow = engine.findNode(by: selectedNodeId) as? NiriWindow
+        else {
+            return nil
+        }
+        return selectedWindow.token
     }
 
     func updateTabbedColumnOverlays() {

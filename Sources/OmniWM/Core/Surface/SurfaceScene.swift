@@ -5,6 +5,7 @@ enum SurfaceKind: String, Equatable {
     case border
     case workspaceBar
     case overview
+    case nativeFullscreenPlaceholder
     case utility
     case quake
 }
@@ -93,7 +94,23 @@ final class SurfaceScene {
 
     func contains(windowNumber: Int) -> Bool {
         guard windowNumber > 0 else { return false }
-        return !(surfaceIDsByWindowNumber[windowNumber] ?? []).isEmpty
+        if !(surfaceIDsByWindowNumber[windowNumber] ?? []).isEmpty {
+            return true
+        }
+
+        let matchingIDs = nodesByID.compactMap { id, node -> String? in
+            guard node.window?.windowNumber == windowNumber else { return nil }
+            return id
+        }
+        guard !matchingIDs.isEmpty else { return false }
+
+        for id in matchingIDs {
+            guard var node = nodesByID[id] else { continue }
+            node.windowNumber = windowNumber
+            nodesByID[id] = node
+            surfaceIDsByWindowNumber[windowNumber, default: []].insert(id)
+        }
+        return true
     }
 
     func containsInteractive(point: CGPoint) -> Bool {

@@ -1916,7 +1916,7 @@ private func waitUntilAXEventTest(
         #expect(controller.layoutRefreshController.debugCounters.relayoutExecutions == 0)
     }
 
-    @Test @MainActor func fullscreenManagedActivationSuspendsManagedWindowWithoutRelayout() async {
+    @Test @MainActor func fullscreenManagedActivationSuspendsManagedWindowAndRequestsPlaceholderRelayout() async {
         let controller = makeAXEventTestController()
         controller.hasStartedServices = true
         guard let workspaceId = controller.activeWorkspace()?.id else {
@@ -1940,10 +1940,10 @@ private func waitUntilAXEventTest(
             onMonitor: controller.workspaceManager.monitorId(for: workspaceId)
         )
 
-        var relayoutReasons: [RefreshReason] = []
+        var relayoutEvents: [(RefreshReason, LayoutRefreshController.RefreshRoute)] = []
         controller.layoutRefreshController.resetDebugState()
-        controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
-            relayoutReasons.append(reason)
+        controller.layoutRefreshController.debugHooks.onRelayout = { reason, route in
+            relayoutEvents.append((reason, route))
             return true
         }
 
@@ -1958,7 +1958,9 @@ private func waitUntilAXEventTest(
         #expect(controller.workspaceManager.isNonManagedFocusActive)
         #expect(controller.workspaceManager.isAppFullscreenActive)
         #expect(controller.workspaceManager.focusedToken == nil)
-        #expect(relayoutReasons.isEmpty)
+        #expect(relayoutEvents.count == 1)
+        #expect(relayoutEvents.first?.0 == .appActivationTransition)
+        #expect(relayoutEvents.first?.1 == .immediateRelayout)
     }
 
     @Test @MainActor func missingFocusedWindowFallbackPreservesNativeFullscreenLifecycleContext() {
@@ -2166,6 +2168,612 @@ private func waitUntilAXEventTest(
         #expect(replacementEntry.handle === originalEntry.handle)
         #expect(controller.workspaceManager.nativeFullscreenRecord(for: replacementToken) == nil)
         #expect(controller.workspaceManager.layoutReason(for: replacementToken) == .standard)
+    }
+
+    @Test @MainActor func nativeFullscreenSameTokenReplacementSuspensionClearsFocusedBorderAndRelayouts() async {
+        let controller = makeAXEventTestController()
+        defer { controller.axEventHandler.resetDebugStateForTests() }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let token = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8049),
+            pid: getpid(),
+            windowId: 8049,
+            to: workspaceId
+        )
+        guard let entry = controller.workspaceManager.entry(for: token) else {
+            Issue.record("Missing same-token native fullscreen replacement entry")
+            return
+        }
+
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenTemporarilyUnavailable(token)
+        controller.setBordersEnabled(true)
+        controller.borderManager.updateFocusedWindow(
+            frame: CGRect(x: 20, y: 20, width: 640, height: 420),
+            windowId: token.windowId
+        )
+        #expect(lastAppliedBorderWindowId(on: controller) == token.windowId)
+
+        var relayoutEvents: [(RefreshReason, LayoutRefreshController.RefreshRoute)] = []
+        controller.layoutRefreshController.resetDebugState()
+        controller.layoutRefreshController.debugHooks.onRelayout = { reason, route in
+            relayoutEvents.append((reason, route))
+            return true
+        }
+
+        let restored = controller.axEventHandler.restoreNativeFullscreenReplacementIfNeeded(
+            token: token,
+            windowId: UInt32(token.windowId),
+            axRef: entry.axRef,
+            workspaceId: workspaceId,
+            appFullscreen: true
+        )
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        guard let record = controller.workspaceManager.nativeFullscreenRecord(for: token) else {
+            Issue.record("Missing same-token native fullscreen record after replacement suspension")
+            return
+        }
+        #expect(restored)
+        #expect(lastAppliedBorderWindowId(on: controller) == nil)
+        #expect(controller.workspaceManager.layoutReason(for: token) == .nativeFullscreen)
+        #expect(record.currentToken == token)
+        #expect(record.availability == .present)
+        if case .suspended = record.transition {} else {
+            Issue.record("Expected same-token replacement to be suspended")
+        }
+        #expect(relayoutEvents.count == 1)
+        #expect(relayoutEvents.first?.0 == .appActivationTransition)
+        #expect(relayoutEvents.first?.1 == .immediateRelayout)
+    }
+
+    @Test @MainActor func nativeFullscreenRekeyedReplacementSuspensionClearsFocusedBorderAndRelayouts() async {
+        let controller = makeAXEventTestController()
+        defer { controller.axEventHandler.resetDebugStateForTests() }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let originalToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8050),
+            pid: getpid(),
+            windowId: 8050,
+            to: workspaceId
+        )
+        guard let originalEntry = controller.workspaceManager.entry(for: originalToken) else {
+            Issue.record("Missing original native fullscreen replacement entry")
+            return
+        }
+
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(originalToken, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenTemporarilyUnavailable(originalToken)
+        controller.setBordersEnabled(true)
+        controller.borderManager.updateFocusedWindow(
+            frame: CGRect(x: 40, y: 40, width: 720, height: 460),
+            windowId: originalToken.windowId
+        )
+        #expect(lastAppliedBorderWindowId(on: controller) == originalToken.windowId)
+
+        var relayoutEvents: [(RefreshReason, LayoutRefreshController.RefreshRoute)] = []
+        controller.layoutRefreshController.resetDebugState()
+        controller.layoutRefreshController.debugHooks.onRelayout = { reason, route in
+            relayoutEvents.append((reason, route))
+            return true
+        }
+
+        let replacementToken = WindowToken(pid: getpid(), windowId: 8051)
+        let replacementWindow = AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8051)
+        let restored = controller.axEventHandler.restoreNativeFullscreenReplacementIfNeeded(
+            token: replacementToken,
+            windowId: 8051,
+            axRef: replacementWindow,
+            workspaceId: workspaceId,
+            appFullscreen: true
+        )
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        guard let replacementEntry = controller.workspaceManager.entry(for: replacementToken),
+              let record = controller.workspaceManager.nativeFullscreenRecord(for: replacementToken)
+        else {
+            Issue.record("Missing rekeyed native fullscreen replacement state")
+            return
+        }
+        #expect(restored)
+        #expect(controller.workspaceManager.entry(for: originalToken) == nil)
+        #expect(replacementEntry.handle === originalEntry.handle)
+        #expect(lastAppliedBorderWindowId(on: controller) == nil)
+        #expect(controller.workspaceManager.layoutReason(for: replacementToken) == .nativeFullscreen)
+        #expect(record.currentToken == replacementToken)
+        #expect(record.availability == .present)
+        if case .suspended = record.transition {} else {
+            Issue.record("Expected rekeyed replacement to be suspended")
+        }
+        #expect(relayoutEvents.count == 1)
+        #expect(relayoutEvents.first?.0 == .appActivationTransition)
+        #expect(relayoutEvents.first?.1 == .immediateRelayout)
+    }
+
+    @Test @MainActor func nativeFullscreenReplacementCreateUsesSingleSuspensionRelayout() async {
+        let controller = makeAXEventTestController()
+        defer { controller.axEventHandler.resetDebugStateForTests() }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let originalToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8052),
+            pid: getpid(),
+            windowId: 8052,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(originalToken, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenTemporarilyUnavailable(originalToken)
+
+        let replacementWindowId: UInt32 = 8056
+        let replacementFrame = CGRect(x: 20, y: 30, width: 900, height: 620)
+        controller.axEventHandler.windowInfoProvider = { windowId in
+            guard windowId == replacementWindowId else { return nil }
+            return makeAXEventWindowInfo(
+                id: windowId,
+                pid: getpid(),
+                frame: replacementFrame
+            )
+        }
+        controller.axEventHandler.axWindowRefProvider = { windowId, _ in
+            guard windowId == replacementWindowId else { return nil }
+            return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(windowId))
+        }
+        controller.axEventHandler.isFullscreenProvider = { axRef in
+            axRef.windowId == Int(replacementWindowId)
+        }
+        controller.axEventHandler.windowFactsProvider = { axRef, pid in
+            makeAXEventWindowRuleFacts(
+                bundleId: "com.example.native-fullscreen",
+                role: nil,
+                subrole: nil,
+                windowServer: makeAXEventWindowInfo(
+                    id: UInt32(axRef.windowId),
+                    pid: pid,
+                    frame: replacementFrame
+                )
+            )
+        }
+
+        var relayoutEvents: [(RefreshReason, LayoutRefreshController.RefreshRoute)] = []
+        controller.layoutRefreshController.resetDebugState()
+        controller.layoutRefreshController.debugHooks.onRelayout = { reason, route in
+            relayoutEvents.append((reason, route))
+            return true
+        }
+
+        controller.axEventHandler.cgsEventObserver(
+            CGSEventObserver.shared,
+            didReceive: .created(windowId: replacementWindowId, spaceId: 0)
+        )
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        let replacementToken = WindowToken(pid: getpid(), windowId: Int(replacementWindowId))
+        #expect(controller.workspaceManager.entry(for: originalToken) == nil)
+        #expect(controller.workspaceManager.entry(for: replacementToken) != nil)
+        #expect(relayoutEvents.count == 1)
+        #expect(relayoutEvents.first?.0 == .appActivationTransition)
+        #expect(relayoutEvents.first?.1 == .immediateRelayout)
+        #expect(controller.layoutRefreshController.debugCounters.requestedByReason[.appActivationTransition] == 1)
+        #expect(controller.layoutRefreshController.debugCounters.requestedByReason[.axWindowCreated] == nil)
+    }
+
+    @Test @MainActor func nativeFullscreenPresentReplacementDoesNotStealUnrelatedFullscreenWindow() async throws {
+        let controller = makeAXEventTestController()
+        defer { controller.axEventHandler.resetDebugStateForTests() }
+        guard let monitor = controller.workspaceManager.monitors.first,
+              let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+        else {
+            Issue.record("Missing Niri native fullscreen placement fixture")
+            return
+        }
+
+        controller.enableNiriLayout(
+            maxWindowsPerColumn: 4,
+            centerFocusedColumn: .never,
+            alwaysCenterSingleColumn: false
+        )
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+        controller.syncMonitorsToNiriEngine()
+
+        let targetToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8053),
+            pid: getpid(),
+            windowId: 8053,
+            to: workspaceId
+        )
+        let siblingBottomToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8054),
+            pid: 80_540,
+            windowId: 8054,
+            to: workspaceId
+        )
+        let siblingTopToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8055),
+            pid: 80_550,
+            windowId: 8055,
+            to: workspaceId
+        )
+        guard let targetEntry = controller.workspaceManager.entry(for: targetToken),
+              let engine = controller.niriEngine
+        else {
+            Issue.record("Missing target native fullscreen entry or Niri engine")
+            return
+        }
+
+        let root = NiriRoot(workspaceId: workspaceId)
+        engine.roots[workspaceId] = root
+        engine.ensureMonitor(for: monitor.id, monitor: monitor).workspaceRoots[workspaceId] = root
+
+        let column = NiriContainer()
+        column.displayMode = .tabbed
+        root.appendChild(column)
+
+        let targetWindow = NiriWindow(token: targetToken)
+        let siblingBottomWindow = NiriWindow(token: siblingBottomToken)
+        let siblingTopWindow = NiriWindow(token: siblingTopToken)
+        column.appendChild(targetWindow)
+        column.appendChild(siblingBottomWindow)
+        column.appendChild(siblingTopWindow)
+        column.setActiveTileIdx(0)
+        engine.updateTabbedColumnVisibility(column: column)
+
+        engine.tokenToNode[targetToken] = targetWindow
+        engine.tokenToNode[siblingBottomToken] = siblingBottomWindow
+        engine.tokenToNode[siblingTopToken] = siblingTopWindow
+
+        _ = controller.workspaceManager.commitWorkspaceSelection(
+            nodeId: targetWindow.id,
+            focusedToken: targetToken,
+            in: workspaceId,
+            onMonitor: monitor.id
+        )
+        controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
+            state.selectedNodeId = targetWindow.id
+            state.activeColumnIndex = 0
+            state.viewOffsetPixels = .static(0)
+        }
+
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(targetToken, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(targetToken)
+
+        let replacementToken = WindowToken(pid: getpid(), windowId: 8056)
+        let restored = controller.axEventHandler.restoreNativeFullscreenReplacementIfNeeded(
+            token: replacementToken,
+            windowId: 8056,
+            axRef: AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8056),
+            workspaceId: workspaceId,
+            appFullscreen: true
+        )
+
+        guard let preservedEntry = controller.workspaceManager.entry(for: targetToken),
+              let record = controller.workspaceManager.nativeFullscreenRecord(for: targetToken),
+              let preservedNode = engine.findNode(for: targetToken),
+              let preservedColumn = engine.column(of: preservedNode)
+        else {
+            Issue.record("Missing preserved native fullscreen placement state")
+            return
+        }
+
+        #expect(restored == false)
+        #expect(controller.workspaceManager.entry(for: replacementToken) == nil)
+        #expect(preservedEntry.handle === targetEntry.handle)
+        #expect(record.currentToken == targetToken)
+        #expect(record.availability == .present)
+        if case .suspended = record.transition {} else {
+            Issue.record("Expected native fullscreen record to stay suspended")
+        }
+        #expect(preservedNode.id == targetWindow.id)
+        #expect(engine.columns(in: workspaceId).map { $0.windowNodes.map(\.token) } == [
+            [targetToken, siblingBottomToken, siblingTopToken]
+        ])
+        #expect(preservedColumn.displayMode == .tabbed)
+        #expect(preservedColumn.activeWindow?.token == targetToken)
+        #expect(!preservedNode.isHiddenInTabbedMode)
+        #expect(siblingBottomWindow.isHiddenInTabbedMode)
+        #expect(siblingTopWindow.isHiddenInTabbedMode)
+    }
+
+    @Test @MainActor func nativeFullscreenPlaceholderRekeysWithManagedWindowIdentity() {
+        let controller = makeAXEventTestController()
+        defer { controller.axEventHandler.resetDebugStateForTests() }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let originalToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8045),
+            pid: getpid(),
+            windowId: 8045,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(originalToken, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(originalToken)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: originalToken,
+                    workspaceId: workspaceId,
+                    frame: CGRect(x: 10, y: 20, width: 400, height: 300),
+                    selected: true,
+                    appName: "Placeholder Rekey",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+
+        let replacementToken = WindowToken(pid: getpid(), windowId: 8046)
+        let replacementWindow = AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8046)
+        _ = controller.axEventHandler.rekeyManagedWindowIdentity(
+            from: originalToken,
+            to: replacementToken,
+            windowId: 8046,
+            axRef: replacementWindow
+        )
+
+        #expect(controller.nativeFullscreenPlaceholderManager.snapshotForTests()[originalToken] == nil)
+        #expect(controller.nativeFullscreenPlaceholderManager.snapshotForTests()[replacementToken]?.frame == CGRect(
+            x: 10,
+            y: 20,
+            width: 400,
+            height: 300
+        ))
+        #expect(controller.workspaceManager.nativeFullscreenRecord(for: replacementToken)?.currentToken == replacementToken)
+    }
+
+    @Test @MainActor func nativeFullscreenPlaceholderPanelStaysOutOfFullscreenSpaces() {
+        let controller = makeAXEventTestController()
+        NativeFullscreenPlaceholderManager.materializesWindowsForTests = true
+        defer {
+            controller.nativeFullscreenPlaceholderManager.removeAll()
+            NativeFullscreenPlaceholderManager.materializesWindowsForTests = false
+            controller.axEventHandler.resetDebugStateForTests()
+        }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let token = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8052),
+            pid: getpid(),
+            windowId: 8052,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: token,
+                    workspaceId: workspaceId,
+                    frame: CGRect(x: 10, y: 20, width: 400, height: 300),
+                    selected: true,
+                    appName: "Fullscreen Space Policy",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+
+        guard let behavior = controller.nativeFullscreenPlaceholderManager.collectionBehaviorForTests(token) else {
+            Issue.record("Missing materialized native fullscreen placeholder panel")
+            return
+        }
+
+        #expect(behavior.contains(.managed))
+        #expect(behavior.contains(.fullScreenNone))
+        #expect(!behavior.contains(.canJoinAllSpaces))
+        #expect(!behavior.contains(.fullScreenAuxiliary))
+    }
+
+    @Test @MainActor func nativeFullscreenPlaceholderPanelUsesSolidBlackBackground() {
+        let controller = makeAXEventTestController()
+        NativeFullscreenPlaceholderManager.materializesWindowsForTests = true
+        defer {
+            controller.nativeFullscreenPlaceholderManager.removeAll()
+            NativeFullscreenPlaceholderManager.materializesWindowsForTests = false
+            controller.axEventHandler.resetDebugStateForTests()
+        }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let token = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8056),
+            pid: getpid(),
+            windowId: 8056,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: token,
+                    workspaceId: workspaceId,
+                    frame: CGRect(x: 10, y: 20, width: 400, height: 300),
+                    selected: true,
+                    appName: "Solid Background",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+
+        guard let appearance = controller.nativeFullscreenPlaceholderManager.appearanceForTests(token),
+              let windowColor = appearance.backgroundColor?.usingColorSpace(.deviceRGB),
+              let contentColor = appearance.contentBackgroundColor?.usingColorSpace(.deviceRGB)
+        else {
+            Issue.record("Missing materialized native fullscreen placeholder appearance")
+            return
+        }
+
+        #expect(appearance.isOpaque)
+        #expect(windowColor.alphaComponent == 1)
+        #expect(windowColor.redComponent == 0)
+        #expect(windowColor.greenComponent == 0)
+        #expect(windowColor.blueComponent == 0)
+        #expect(contentColor.alphaComponent == 1)
+        #expect(contentColor.redComponent == 0)
+        #expect(contentColor.greenComponent == 0)
+        #expect(contentColor.blueComponent == 0)
+    }
+
+    @Test @MainActor func nativeFullscreenPlaceholderCreateEventIsSkippedAsOwnedWindow() async {
+        let controller = makeAXEventTestController()
+        NativeFullscreenPlaceholderManager.materializesWindowsForTests = true
+        defer {
+            controller.nativeFullscreenPlaceholderManager.removeAll()
+            NativeFullscreenPlaceholderManager.materializesWindowsForTests = false
+            controller.axEventHandler.resetDebugStateForTests()
+        }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let token = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8060),
+            pid: getpid(),
+            windowId: 8060,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+        let frame = CGRect(x: 10, y: 20, width: 400, height: 300)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: token,
+                    workspaceId: workspaceId,
+                    frame: frame,
+                    selected: true,
+                    appName: "Owned Create",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+        guard let windowNumber = controller.nativeFullscreenPlaceholderManager.windowNumberForTests(token),
+              let windowId = UInt32(exactly: windowNumber)
+        else {
+            Issue.record("Missing materialized native fullscreen placeholder window number")
+            return
+        }
+
+        let tokensBefore = Set(controller.workspaceManager.entries(forPid: getpid()).map(\.token))
+        var subscriptions: [[UInt32]] = []
+        controller.axEventHandler.windowInfoProvider = { candidateWindowId in
+            guard candidateWindowId == windowId else { return nil }
+            return WindowServerInfo(id: candidateWindowId, pid: getpid(), level: 0, frame: frame)
+        }
+        controller.axEventHandler.axWindowRefProvider = { candidateWindowId, _ in
+            guard candidateWindowId == windowId else { return nil }
+            return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(candidateWindowId))
+        }
+        controller.axEventHandler.windowFactsProvider = { _, _ in
+            makeAXEventWindowRuleFacts(bundleId: Bundle.main.bundleIdentifier ?? "com.example.omniwm")
+        }
+        controller.axEventHandler.windowSubscriptionHandler = { windowIds in
+            subscriptions.append(windowIds)
+        }
+        controller.layoutRefreshController.resetDebugState()
+
+        controller.axEventHandler.cgsEventObserver(
+            CGSEventObserver.shared,
+            didReceive: .created(windowId: windowId, spaceId: 0)
+        )
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        let tokensAfter = Set(controller.workspaceManager.entries(forPid: getpid()).map(\.token))
+        #expect(tokensAfter == tokensBefore)
+        #expect(subscriptions.isEmpty)
+        #expect(controller.layoutRefreshController.debugCounters.relayoutExecutions == 0)
+    }
+
+    @Test @MainActor func nativeFullscreenRestoreAndDestroyRemovePlaceholderSnapshot() {
+        let controller = makeAXEventTestController()
+        defer { controller.axEventHandler.resetDebugStateForTests() }
+        guard let workspaceId = controller.activeWorkspace()?.id else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        let restoredToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8047),
+            pid: getpid(),
+            windowId: 8047,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(restoredToken, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(restoredToken)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: restoredToken,
+                    workspaceId: workspaceId,
+                    frame: CGRect(x: 30, y: 40, width: 420, height: 320),
+                    selected: true,
+                    appName: "Placeholder Restore",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+        guard let restoredEntry = controller.workspaceManager.entry(for: restoredToken) else {
+            Issue.record("Missing native fullscreen restore entry")
+            return
+        }
+
+        controller.axEventHandler.handleManagedAppActivation(
+            entry: restoredEntry,
+            isWorkspaceActive: true,
+            appFullscreen: false
+        )
+
+        #expect(controller.nativeFullscreenPlaceholderManager.snapshotForTests()[restoredToken] == nil)
+        #expect(controller.workspaceManager.layoutReason(for: restoredToken) == .standard)
+
+        let removedToken = controller.workspaceManager.addWindow(
+            AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: 8048),
+            pid: getpid(),
+            windowId: 8048,
+            to: workspaceId
+        )
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(removedToken, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(removedToken)
+        controller.nativeFullscreenPlaceholderManager.update(
+            placeholders: [
+                NativeFullscreenPlaceholderUpdate(
+                    token: removedToken,
+                    workspaceId: workspaceId,
+                    frame: CGRect(x: 50, y: 60, width: 440, height: 340),
+                    selected: false,
+                    appName: "Placeholder Destroy",
+                    icon: nil
+                )
+            ],
+            in: workspaceId
+        )
+
+        controller.axEventHandler.handleRemoved(token: removedToken)
+
+        #expect(controller.nativeFullscreenPlaceholderManager.snapshotForTests()[removedToken] == nil)
+        #expect(controller.workspaceManager.nativeFullscreenRecord(for: removedToken)?.availability == .temporarilyUnavailable)
     }
 
     @Test @MainActor func workspaceDidActivateApplicationRevealsRestoredManagedWindowOnInactiveWorkspace() {

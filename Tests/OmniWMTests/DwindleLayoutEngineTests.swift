@@ -401,6 +401,41 @@ private func configureWorkspacesAsDwindle(
         #expect(plan.diff.visibilityChanges.isEmpty)
     }
 
+    @Test @MainActor func nativeFullscreenSuspendedWindowEmitsPlaceholderInsteadOfFrameChangeInDwindle() async throws {
+        let controller = makeLayoutPlanTestController()
+        guard let monitor = controller.workspaceManager.monitors.first,
+              let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+        else {
+            Issue.record("Missing monitor or active workspace for Dwindle native fullscreen placeholder test")
+            return
+        }
+
+        configureWorkspaceAsDwindle(on: controller, workspaceId: workspaceId)
+        controller.enableDwindleLayout()
+        await waitForLayoutPlanRefreshWork(on: controller)
+
+        let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 603)
+        _ = controller.workspaceManager.setManagedFocus(token, in: workspaceId, onMonitor: monitor.id)
+        _ = controller.workspaceManager.requestNativeFullscreenEnter(token, in: workspaceId)
+        _ = controller.workspaceManager.markNativeFullscreenSuspended(token)
+
+        let plans = try await controller.dwindleLayoutHandler.layoutWithDwindleEngine(
+            activeWorkspaces: [workspaceId]
+        )
+        guard let plan = plans.first else {
+            Issue.record("Expected a Dwindle layout plan for native fullscreen placeholder test")
+            return
+        }
+
+        let placeholder = plan.diff.nativeFullscreenPlaceholders.first { $0.token == token }
+        #expect(placeholder != nil)
+        #expect(placeholder?.frame.width ?? 0 > 1)
+        #expect(placeholder?.frame.height ?? 0 > 1)
+        #expect(placeholder?.selected == true)
+        #expect(!plan.diff.frameChanges.contains { $0.token == token })
+        #expect(plan.diff.visibilityChanges.isEmpty)
+    }
+
     @Test @MainActor func relayoutPlanStartsAnimationWhenFramesChange() async throws {
         let controller = makeLayoutPlanTestController()
         guard let monitor = controller.workspaceManager.monitors.first,
