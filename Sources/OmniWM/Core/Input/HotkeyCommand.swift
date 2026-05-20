@@ -22,6 +22,7 @@ enum HotkeyCommand: Codable, Equatable, Hashable {
     case focusMonitorPrevious
     case focusMonitorNext
     case focusMonitorLast
+    case moveWorkspaceToNextMonitor
     case toggleFullscreen
     case toggleNativeFullscreen
     case moveColumn(Direction)
@@ -94,6 +95,10 @@ enum HotkeyCommand: Codable, Equatable, Hashable {
     case toggleQuakeTerminal
     case toggleWorkspaceLayout
     case toggleOverview
+
+    case appRuleOpenOrRotate(UUID)
+    case appRuleOpenNewInstance(UUID)
+    case appRulePullRight(UUID)
 
     var displayName: String {
         ActionCatalog.title(for: self) ?? String(describing: self)

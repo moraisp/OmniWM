@@ -53,6 +53,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         case assignToWorkspace
         case minWidth
         case minHeight
+        case activationKey
     }
 
     let id: UUID
@@ -68,6 +69,7 @@ struct AppRule: Codable, Identifiable, Equatable {
     var assignToWorkspace: String?
     var minWidth: Double?
     var minHeight: Double?
+    var activationKey: String?
 
     init(
         id: UUID = UUID(),
@@ -82,7 +84,8 @@ struct AppRule: Codable, Identifiable, Equatable {
         layout: WindowRuleLayoutAction? = nil,
         assignToWorkspace: String? = nil,
         minWidth: Double? = nil,
-        minHeight: Double? = nil
+        minHeight: Double? = nil,
+        activationKey: String? = nil
     ) {
         self.id = id
         self.bundleId = bundleId
@@ -97,6 +100,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         self.assignToWorkspace = assignToWorkspace
         self.minWidth = minWidth
         self.minHeight = minHeight
+        self.activationKey = Self.normalizedActivationKey(activationKey)
         normalizeLegacyManageOff()
     }
 
@@ -155,6 +159,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         assignToWorkspace = try container.decodeIfPresent(String.self, forKey: .assignToWorkspace)
         minWidth = try container.decodeIfPresent(Double.self, forKey: .minWidth)
         minHeight = try container.decodeIfPresent(Double.self, forKey: .minHeight)
+        activationKey = Self.normalizedActivationKey(try container.decodeIfPresent(String.self, forKey: .activationKey))
         normalizeLegacyManageOff()
     }
 
@@ -173,11 +178,21 @@ struct AppRule: Codable, Identifiable, Equatable {
         try container.encodeIfPresent(assignToWorkspace, forKey: .assignToWorkspace)
         try container.encodeIfPresent(minWidth, forKey: .minWidth)
         try container.encodeIfPresent(minHeight, forKey: .minHeight)
+        try container.encodeIfPresent(activationKey, forKey: .activationKey)
     }
 
     private mutating func normalizeLegacyManageOff() {
         guard manage == .off else { return }
         manage = nil
         layout = .float
+    }
+
+    static func normalizedActivationKey(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 1, let scalar = trimmed.unicodeScalars.first else { return nil }
+        let uppercased = String(scalar).uppercased()
+        guard uppercased.range(of: #"^[A-Z]$"#, options: .regularExpression) != nil else { return nil }
+        return uppercased
     }
 }

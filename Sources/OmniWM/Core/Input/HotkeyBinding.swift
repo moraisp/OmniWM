@@ -162,6 +162,16 @@ enum HotkeyBindingRegistry {
         return HotkeyBinding(id: id, command: defaultBinding.command, binding: binding)
     }
 
+    static func mergeMissingDefaults(into bindings: [HotkeyBinding]) -> [HotkeyBinding] {
+        let bindingsById = Dictionary(
+            bindings.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return defaultBindings.map { defaultBinding in
+            bindingsById[defaultBinding.id] ?? defaultBinding
+        }
+    }
+
     static func canonicalize(_ persisted: [PersistedHotkeyBinding]) -> [HotkeyBinding] {
         var overrides: [String: KeyBinding] = [:]
         var explicitOverrideIDs: Set<String> = []

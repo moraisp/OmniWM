@@ -3,6 +3,11 @@ import Foundation
 
 @MainActor
 final class WindowActionHandler {
+    enum NavigationPlacement {
+        case centered
+        case leading
+    }
+
     private enum RaisableSurfaceBatchKey: Hashable {
         case application(pid_t)
         case ownedApplication
@@ -334,7 +339,7 @@ final class WindowActionHandler {
     func navigateToWindow(handle: WindowHandle) -> Bool {
         guard let controller else { return false }
         guard let entry = controller.workspaceManager.entry(for: handle) else { return false }
-        return navigateToWindowInternal(token: handle.id, workspaceId: entry.workspaceId)
+        return navigateToWindowInternal(token: handle.id, workspaceId: entry.workspaceId, placement: .centered)
     }
 
     @discardableResult
@@ -393,7 +398,11 @@ final class WindowActionHandler {
     }
 
     @discardableResult
-    func navigateToWindowInternal(token: WindowToken, workspaceId: WorkspaceDescriptor.ID) -> Bool {
+    func navigateToWindowInternal(
+        token: WindowToken,
+        workspaceId: WorkspaceDescriptor.ID,
+        placement: NavigationPlacement = .centered
+    ) -> Bool {
         guard let controller else { return false }
         guard let engine = controller.niriEngine else { return false }
 
@@ -630,5 +639,115 @@ final class WindowActionHandler {
         }
 
         return appInfoMap.values.sorted { $0.appName < $1.appName }
+    }
+
+    @discardableResult
+    func openOrRotateApp(ruleId: UUID) -> ExternalCommandResult {
+        guard let rule = appRule(id: ruleId) else { return .notFound }
+        let bundleId = rule.bundleId
+        let entries = appEntries(bundleId: bundleId)
+        guard !entries.isEmpty else {
+            return launchApp(bundleId: bundleId, newInstance: false)
+        }
+
+        let target = rotatedEntry(in: entries, bundleId: bundleId)
+        return navigateToWindowInternal(
+            token: target.token,
+            workspaceId: target.workspaceId,
+            placement: .leading
+        ) ? .executed : .notFound
+    }
+
+    @discardableResult
+    func openNewAppInstance(ruleId: UUID) -> ExternalCommandResult {
+        guard let rule = appRule(id: ruleId) else { return .notFound }
+        return launchApp(bundleId: rule.bundleId, newInstance: true)
+    }
+
+    @discardableResult
+    func pullAppWindowRight(ruleId: UUID) -> ExternalCommandResult {
+        guard let rule = appRule(id: ruleId) else { return .notFound }
+        let bundleId = rule.bundleId
+        let entries = appEntries(bundleId: bundleId)
+        guard !entries.isEmpty else {
+            return launchApp(bundleId: bundleId, newInstance: false)
+        }
+
+        let target = rotatedEntry(in: entries, bundleId: bundleId)
+        let handle = WindowHandle(id: target.token)
+        if summonWindowRight(handle: handle) {
+            return .executed
+        }
+        return navigateToWindowInternal(token: target.token, workspaceId: target.workspaceId) ? .executed : .notFound
+    }
+
+    private func appRule(id: UUID) -> AppRule? {
+        controller?.settings.appRules.first { $0.id == id }
+    }
+
+    private func appEntries(bundleId: String) -> [WindowModel.Entry] {
+        guard let controller else { return [] }
+        let normalizedBundleId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedBundleId.isEmpty else { return [] }
+
+        return controller.workspaceManager.allEntries()
+            .filter { entry in
+                let entryBundleId = controller.appInfoCache.bundleId(for: entry.pid)
+                    ?? entry.managedReplacementMetadata?.bundleId
+                return entryBundleId?.lowercased() == normalizedBundleId
+            }
+            .sorted { lhs, rhs in
+                if lhs.workspaceId != rhs.workspaceId {
+                    return lhs.workspaceId.uuidString < rhs.workspaceId.uuidString
+                }
+                if lhs.pid != rhs.pid {
+                    return lhs.pid < rhs.pid
+                }
+                return lhs.windowId < rhs.windowId
+            }
+    }
+
+    private func rotatedEntry(in entries: [WindowModel.Entry], bundleId: String) -> WindowModel.Entry {
+        guard let controller,
+              let focusedToken = controller.workspaceManager.focusedToken,
+              let focusedEntry = controller.workspaceManager.entry(for: focusedToken)
+        else {
+            return entries[0]
+        }
+
+        let focusedBundleId = controller.appInfoCache.bundleId(for: focusedEntry.pid)
+            ?? focusedEntry.managedReplacementMetadata?.bundleId
+        guard focusedBundleId?.caseInsensitiveCompare(bundleId) == .orderedSame,
+              let currentIndex = entries.firstIndex(where: { $0.token == focusedToken })
+        else {
+            return entries[0]
+        }
+
+        return entries[(currentIndex + 1) % entries.count]
+    }
+
+    private func launchApp(bundleId: String, newInstance: Bool) -> ExternalCommandResult {
+        let normalizedBundleId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedBundleId.isEmpty else { return .notFound }
+
+        if !newInstance,
+           let app = NSWorkspace.shared.runningApplications.first(where: {
+               $0.bundleIdentifier?.caseInsensitiveCompare(normalizedBundleId) == .orderedSame
+           })
+        {
+            app.activate(options: [])
+            return .executed
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = newInstance ? ["-n", "-b", normalizedBundleId] : ["-b", normalizedBundleId]
+
+        do {
+            try process.run()
+            return .executed
+        } catch {
+            return .notFound
+        }
     }
 }

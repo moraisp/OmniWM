@@ -134,6 +134,22 @@ extension NiriLayoutEngine {
         attachWorkspaceRootIfNeeded(workspaceId, to: targetMonitor)
     }
 
+    func scaleWorkspaceWidthState(_ workspaceId: WorkspaceDescriptor.ID, by ratio: CGFloat) {
+        guard ratio.isFinite, ratio > 0, abs(ratio - 1) > 0.001 else { return }
+
+        for column in columns(in: workspaceId) {
+            column.width = scaled(column.width, by: ratio)
+            column.savedWidth = column.savedWidth.map { scaled($0, by: ratio) }
+            column.cachedWidth = scaled(column.cachedWidth, by: ratio)
+            column.targetWidth = column.targetWidth.map { scaled($0, by: ratio) }
+
+            for window in column.windowNodes {
+                window.windowWidth = scaled(window.windowWidth, by: ratio)
+                window.resolvedWidth = window.resolvedWidth.map { scaled($0, by: ratio) }
+            }
+        }
+    }
+
     /// Reconcile the authoritative full workspace-to-monitor assignment set
     /// during monitor sync and prune stale duplicate roots.
     func syncWorkspaceAssignments(
@@ -215,5 +231,29 @@ extension NiriLayoutEngine {
         for niriMonitor in monitors.values where niriMonitor.id != keepingMonitorId {
             niriMonitor.workspaceRoots.removeValue(forKey: workspaceId)
         }
+    }
+
+    private func scaled(_ size: ProportionalSize, by ratio: CGFloat) -> ProportionalSize {
+        switch size {
+        case .proportion:
+            return size
+        case let .fixed(value):
+            return .fixed(scaled(value, by: ratio))
+        }
+    }
+
+    private func scaled(_ size: WeightedSize, by ratio: CGFloat) -> WeightedSize {
+        switch size {
+        case .auto,
+             .preset:
+            return size
+        case let .fixed(value):
+            return .fixed(scaled(value, by: ratio))
+        }
+    }
+
+    private func scaled(_ value: CGFloat, by ratio: CGFloat) -> CGFloat {
+        guard value.isFinite, value > 0 else { return value }
+        return value * ratio
     }
 }

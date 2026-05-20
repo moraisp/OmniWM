@@ -343,6 +343,12 @@ enum ActionCatalog {
                 command: .focusMonitorLast,
                 category: .monitor,
                 binding: KeyBinding(keyCode: UInt32(kVK_ANSI_Grave), modifiers: UInt32(controlKey | cmdKey))
+            ),
+            action(
+                id: "moveWorkspaceToNextMonitor",
+                command: .moveWorkspaceToNextMonitor,
+                category: .monitor,
+                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(optionKey | shiftKey))
             )
         ])
 
@@ -794,6 +800,7 @@ enum ActionCatalog {
              .focusMonitorPrevious,
              .focusMonitorNext,
              .focusMonitorLast,
+             .moveWorkspaceToNextMonitor,
              .toggleNativeFullscreen,
              .swapWorkspaceWithMonitor,
              .workspaceBackAndForth,
@@ -810,7 +817,10 @@ enum ActionCatalog {
              .toggleHiddenBar,
              .toggleQuakeTerminal,
              .toggleWorkspaceLayout,
-             .toggleOverview:
+             .toggleOverview,
+             .appRuleOpenOrRotate,
+             .appRuleOpenNewInstance,
+             .appRulePullRight:
             .shared
         }
     }
@@ -832,6 +842,7 @@ enum ActionCatalog {
         case .focusMonitorPrevious: "Focus Previous Monitor"
         case .focusMonitorNext: "Focus Next Monitor"
         case .focusMonitorLast: "Focus Last Monitor"
+        case .moveWorkspaceToNextMonitor: "Move Workspace to Next Monitor"
         case .toggleFullscreen: "Toggle Fullscreen"
         case .toggleNativeFullscreen: "Toggle Native Fullscreen"
         case let .moveColumn(dir): "Move Column \(dir.displayName)"
@@ -896,6 +907,9 @@ enum ActionCatalog {
         case .toggleQuakeTerminal: "Toggle Quake Terminal"
         case .toggleWorkspaceLayout: "Toggle Workspace Layout"
         case .toggleOverview: "Toggle Overview"
+        case .appRuleOpenOrRotate: "Open or Rotate App"
+        case .appRuleOpenNewInstance: "Open New App Instance"
+        case .appRulePullRight: "Pull App Window Right"
         }
     }
 
@@ -975,6 +989,8 @@ enum ActionCatalog {
             .focusMonitorNext
         case .focusMonitorLast:
             .focusMonitorLast
+        case .moveWorkspaceToNextMonitor:
+            nil
         case .moveColumn:
             .moveColumn
         case .moveColumnToFirst:
@@ -1059,6 +1075,10 @@ enum ActionCatalog {
             .scratchpadToggle
         case .openMenuAnywhere:
             .openMenuAnywhere
+        case .appRuleOpenOrRotate,
+             .appRuleOpenNewInstance,
+             .appRulePullRight:
+            nil
         }
     }
 

@@ -135,6 +135,12 @@ enum KeySymbolMapper {
         keyDescriptors[keyCode]?.name ?? "?"
     }
 
+    static func keyCode(forLetter letter: String) -> UInt32? {
+        let normalized = letter.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard normalized.count == 1 else { return nil }
+        return nameToKeyCode[normalized]
+    }
+
     static func humanReadableString(keyCode: UInt32, modifiers: UInt32) -> String {
         let mods = modifierNames(modifiers)
         let key = keyName(keyCode)

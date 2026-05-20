@@ -170,6 +170,9 @@ struct AppRuleSidebarRow: View {
                 if rule.minWidth != nil || rule.minHeight != nil {
                     RuleBadge(text: "Size", color: .orange)
                 }
+                if let activationKey = rule.activationKey {
+                    RuleBadge(text: "⌥\(activationKey)", color: .indigo)
+                }
                 if rule.hasAdvancedMatchers {
                     RuleBadge(text: "Advanced", color: .purple)
                 }
@@ -293,6 +296,15 @@ struct AppRuleDetailView: View {
                         Text("px")
                             .foregroundColor(.secondary)
                     }
+
+                    LabeledContent("Hotkey Letter") {
+                        TextField("", text: $draft.activationKey)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 52)
+                            .onChange(of: draft.activationKey) { _, newValue in
+                                draft.activationKey = normalizedActivationKeyText(newValue)
+                            }
+                    }
                 }
 
                 Toggle("Minimum Height", isOn: $draft.minHeightEnabled)
@@ -396,12 +408,27 @@ struct AppRuleAddSheet: View {
 
                     DisclosureGroup("Pick from running apps", isExpanded: $isPickerExpanded) {
                         if runningApps.isEmpty {
-                            Text("No apps with windows found")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("No apps with windows found")
+                                    .foregroundColor(.secondary)
+                                    .font(.caption)
+                                Button {
+                                    refreshRunningApps()
+                                } label: {
+                                    Label("Refresh", systemImage: "arrow.clockwise")
+                                }
+                                .buttonStyle(.bordered)
+                            }
                         } else {
                             ScrollView {
                                 LazyVStack(alignment: .leading, spacing: 4) {
+                                    Button {
+                                        refreshRunningApps()
+                                    } label: {
+                                        Label("Refresh", systemImage: "arrow.clockwise")
+                                    }
+                                    .buttonStyle(.bordered)
+
                                     ForEach(runningApps) { app in
                                         RunningAppRow(
                                             app: app,
@@ -415,7 +442,12 @@ struct AppRuleAddSheet: View {
                         }
                     }
                     .onAppear {
-                        runningApps = controller.runningAppsWithWindows()
+                        refreshRunningApps()
+                    }
+                    .onChange(of: isPickerExpanded) { _, isExpanded in
+                        if isExpanded {
+                            refreshRunningApps()
+                        }
                     }
 
                     if let appInfo = selectedAppInfo {
@@ -435,6 +467,15 @@ struct AppRuleAddSheet: View {
                     Text("Examples: com.apple.finder or dentalplus-air")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    LabeledContent("Hotkey Letter") {
+                        TextField("", text: $draft.activationKey)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 52)
+                            .onChange(of: draft.activationKey) { _, newValue in
+                                draft.activationKey = normalizedActivationKeyText(newValue)
+                            }
+                    }
                 }
 
                 Section("Window Behavior") {
@@ -556,12 +597,25 @@ struct AppRuleAddSheet: View {
         isPickerExpanded = false
     }
 
+    private func refreshRunningApps() {
+        runningApps = controller.runningAppsWithWindows()
+        selectedAppInfo = runningApps.first { $0.bundleId == draft.bundleId }
+    }
+
     private func useCurrentWindowSize(_ size: CGSize) {
         draft.minWidth = size.width
         draft.minHeight = size.height
         draft.minWidthEnabled = true
         draft.minHeightEnabled = true
     }
+}
+
+private func normalizedActivationKeyText(_ value: String) -> String {
+    guard let scalar = value.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.first else {
+        return ""
+    }
+    let uppercased = String(scalar).uppercased()
+    return AppRule.normalizedActivationKey(uppercased) ?? ""
 }
 
 struct AdvancedMatchersEditor: View {

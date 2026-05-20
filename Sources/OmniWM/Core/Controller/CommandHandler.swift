@@ -83,6 +83,8 @@ final class CommandHandler {
             controller.workspaceNavigationHandler.focusMonitorCyclic(previous: false)
         case .focusMonitorLast:
             controller.workspaceNavigationHandler.focusLastMonitor()
+        case .moveWorkspaceToNextMonitor:
+            controller.workspaceNavigationHandler.moveCurrentWorkspaceToNextMonitor()
         case .toggleFullscreen:
             toggleFullscreen()
         case .toggleNativeFullscreen:
@@ -198,6 +200,12 @@ final class CommandHandler {
             toggleWorkspaceLayout()
         case .toggleOverview:
             controller.toggleOverview()
+        case let .appRuleOpenOrRotate(ruleId):
+            return controller.windowActionHandler.openOrRotateApp(ruleId: ruleId)
+        case let .appRuleOpenNewInstance(ruleId):
+            return controller.windowActionHandler.openNewAppInstance(ruleId: ruleId)
+        case let .appRulePullRight(ruleId):
+            return controller.windowActionHandler.pullAppWindowRight(ruleId: ruleId)
         }
 
         return .executed

@@ -173,6 +173,74 @@ final class WorkspaceNavigationHandler {
         switchToMonitor(previousId, fromMonitor: currentMonitorId)
     }
 
+    func moveCurrentWorkspaceToNextMonitor() {
+        guard let controller else { return }
+        guard let currentMonitorId = interactionMonitorId(for: controller) else { return }
+        guard let currentWorkspace = controller.activeWorkspace() else { return }
+        guard let sourceMonitor = controller.workspaceManager.monitor(byId: currentMonitorId) else { return }
+        guard let targetMonitor = controller.workspaceManager.nextMonitor(from: currentMonitorId) else { return }
+
+        saveNiriViewportState(for: currentWorkspace.id)
+        controller.layoutRefreshController.stopScrollAnimation(for: sourceMonitor.displayId)
+        controller.layoutRefreshController.stopScrollAnimation(for: targetMonitor.displayId)
+        controller.layoutRefreshController.cancelActiveAnimations(for: currentWorkspace.id)
+
+        scaleNiriWorkspaceState(
+            currentWorkspace.id,
+            from: sourceMonitor,
+            to: targetMonitor
+        )
+        assignWorkspaceConfiguration(named: currentWorkspace.name, to: targetMonitor)
+        controller.workspaceManager.applySettings()
+
+        _ = controller.workspaceManager.moveWorkspaceToMonitor(currentWorkspace.id, to: targetMonitor.id)
+
+        guard let refocusedWorkspace = controller.workspaceManager.focusWorkspace(named: currentWorkspace.name) else {
+            controller.syncMonitorsToNiriEngine()
+            return
+        }
+
+        controller.niriEngine?.moveWorkspace(
+            refocusedWorkspace.workspace.id,
+            to: refocusedWorkspace.monitor.id,
+            monitor: refocusedWorkspace.monitor
+        )
+        controller.syncMonitorsToNiriEngine()
+
+        commitWorkspaceTransitionFocusHandoff(
+            targetWorkspaceId: refocusedWorkspace.workspace.id,
+            monitor: refocusedWorkspace.monitor,
+            startScrollAnimation: false
+        )
+    }
+
+    private func scaleNiriWorkspaceState(
+        _ workspaceId: WorkspaceDescriptor.ID,
+        from sourceMonitor: Monitor,
+        to targetMonitor: Monitor
+    ) {
+        guard let controller else { return }
+        let sourceWidth = controller.insetWorkingFrame(from: sourceMonitor.visibleFrame).width
+        let targetWidth = controller.insetWorkingFrame(from: targetMonitor.visibleFrame).width
+        guard sourceWidth.isFinite, sourceWidth > 0, targetWidth.isFinite, targetWidth > 0 else { return }
+
+        let ratio = targetWidth / sourceWidth
+        controller.niriEngine?.scaleWorkspaceWidthState(workspaceId, by: ratio)
+        controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
+            state.viewOffsetPixels = .static(state.viewOffsetPixels.target() * ratio)
+            state.viewOffsetToRestore = state.viewOffsetToRestore.map { $0 * ratio }
+        }
+    }
+
+    private func assignWorkspaceConfiguration(named workspaceName: String, to monitor: Monitor) {
+        guard let controller else { return }
+        var configs = controller.settings.workspaceConfigurations
+        guard let index = configs.firstIndex(where: { $0.name == workspaceName }) else { return }
+
+        configs[index].monitorAssignment = .specificDisplay(OutputId(from: monitor))
+        controller.settings.workspaceConfigurations = configs
+    }
+
     private func switchToMonitor(_ targetMonitorId: Monitor.ID, fromMonitor currentMonitorId: Monitor.ID) {
         guard let controller else { return }
 

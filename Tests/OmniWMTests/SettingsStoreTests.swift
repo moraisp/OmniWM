@@ -589,6 +589,23 @@ struct HotkeySurfaceTests {
         #expect(!ids.contains("summonWorkspace.8"))
         #expect(ids.contains("focusMonitorNext"))
         #expect(ids.contains("focusMonitorLast"))
+        #expect(ids.contains("moveWorkspaceToNextMonitor"))
+    }
+
+    @Test @MainActor func settingsStoreAppendsNewDefaultHotkeysToPersistedList() {
+        let settings = SettingsStore(defaults: makeTestDefaults())
+        let customMoveLeft = HotkeyBinding(
+            id: "move.left",
+            command: .move(.left),
+            binding: KeyBinding(keyCode: UInt32(kVK_ANSI_J), modifiers: UInt32(optionKey))
+        )
+        var export = SettingsExport.defaults()
+        export.hotkeyBindings = [customMoveLeft]
+
+        settings.applyExport(export, monitors: [])
+
+        #expect(settings.hotkeyBindings.first { $0.id == "move.left" }?.binding == customMoveLeft.binding)
+        #expect(settings.hotkeyBindings.contains { $0.id == "moveWorkspaceToNextMonitor" })
     }
 
     @Test func hotkeyBindingEncodesWithoutSerializedCommand() throws {

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 import OmniWMIPC
 
@@ -687,7 +688,7 @@ final class WMController {
     }
 
     func updateHotkeyBindings(_ bindings: [HotkeyBinding]) {
-        hotkeys.updateBindings(bindings)
+        hotkeys.updateBindings(bindings + appRuleHotkeyBindings())
     }
 
     func updateWorkspaceConfig() {
@@ -702,11 +703,41 @@ final class WMController {
 
     func updateAppRules() {
         rebuildAppRulesCache()
+        updateHotkeyBindings(settings.hotkeyBindings)
         layoutRefreshController.requestFullRescan(reason: .appRulesChanged)
     }
 
     var hotkeyRegistrationFailures: [HotkeyCommand: HotkeyRegistrationFailureReason] {
         hotkeys.registrationFailures
+    }
+
+    private func appRuleHotkeyBindings() -> [HotkeyBinding] {
+        settings.appRules.flatMap { rule -> [HotkeyBinding] in
+            guard let activationKey = rule.activationKey,
+                  let keyCode = KeySymbolMapper.keyCode(forLetter: activationKey)
+            else {
+                return []
+            }
+
+            let baseId = "appRule.\(rule.id.uuidString).\(activationKey.lowercased())"
+            return [
+                HotkeyBinding(
+                    id: "\(baseId).openOrRotate",
+                    command: .appRuleOpenOrRotate(rule.id),
+                    binding: KeyBinding(keyCode: keyCode, modifiers: UInt32(optionKey))
+                ),
+                HotkeyBinding(
+                    id: "\(baseId).openNewInstance",
+                    command: .appRuleOpenNewInstance(rule.id),
+                    binding: KeyBinding(keyCode: keyCode, modifiers: UInt32(optionKey | controlKey))
+                ),
+                HotkeyBinding(
+                    id: "\(baseId).pullRight",
+                    command: .appRulePullRight(rule.id),
+                    binding: KeyBinding(keyCode: keyCode, modifiers: UInt32(optionKey | shiftKey))
+                )
+            ]
+        }
     }
 
     private var workspaceBarRefreshIsEnabled: Bool {

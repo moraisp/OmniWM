@@ -184,6 +184,20 @@ extension ViewportState {
         selectionProgress = 0
     }
 
+    mutating func snapToColumnLeading(
+        _ columnIndex: Int,
+        columns: [NiriContainer],
+        gap: CGFloat
+    ) {
+        guard !columns.isEmpty else { return }
+        let clampedIndex = columnIndex.clamped(to: 0 ... (columns.count - 1))
+        activeColumnIndex = clampedIndex
+
+        let targetOffset = columnX(at: clampedIndex, columns: columns, gap: gap)
+        viewOffsetPixels = .static(targetOffset)
+        selectionProgress = 0
+    }
+
     mutating func scrollByPixels(
         _ deltaPixels: CGFloat,
         columns: [NiriContainer],
