@@ -2004,6 +2004,39 @@ private func makeCenteredCrossMonitorFixture(
         #expect(abs(topFrame.height - 884) < 0.001)
     }
 
+    @Test func observedShortWindowIsCenteredVerticallyInColumn() {
+        let engine = NiriLayoutEngine(maxWindowsPerColumn: 1, maxVisibleColumns: 2)
+        let workspaceId = UUID()
+        let window = engine.addWindow(handle: makeTestHandle(), to: workspaceId, afterSelection: nil)
+        let observedSize = CGSize(width: 320, height: 220)
+
+        let adapted = engine.adaptWindowContainerToObservedSize(
+            token: window.token,
+            observedSize: observedSize,
+            in: workspaceId,
+            orientation: .horizontal
+        )
+
+        let monitor = makeLayoutPlanTestMonitor(width: 1000, height: 800)
+        let gaps = LayoutGaps(horizontal: 8, vertical: 8)
+        let layout = engine.calculateCombinedLayoutWithVisibility(
+            in: workspaceId,
+            monitor: monitor,
+            gaps: gaps,
+            state: ViewportState()
+        )
+
+        guard let frame = layout.frames[window.token] else {
+            Issue.record("Expected a rendered frame for the observed short Niri window")
+            return
+        }
+
+        #expect(adapted)
+        #expect(abs(frame.width - observedSize.width) < 0.001)
+        #expect(abs(frame.height - observedSize.height) < 0.001)
+        #expect(abs(frame.midY - monitor.frame.midY) < 0.001)
+    }
+
     @Test func verticalTabbedColumnUsesOnlyOuterGapsForSharedTileFrame() {
         let engine = NiriLayoutEngine(maxWindowsPerColumn: 3, maxVisibleColumns: 1)
         let workspaceId = UUID()

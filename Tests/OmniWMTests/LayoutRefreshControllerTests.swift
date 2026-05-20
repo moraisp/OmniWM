@@ -227,13 +227,13 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
         #expect(controller.axManager.lastAppliedFrame(for: token.windowId) == restoredFrame)
     }
 
-    @Test @MainActor func executeLayoutPlanCreatesResizePlaceholderAfterAXSizeRefusal() async {
+    @Test @MainActor func executeLayoutPlanLearnsObservedMinimumSizeAfterAXSizeRefusal() async {
         await withAXFrameProviderIsolationForTests {
             let controller = makeLayoutPlanTestController()
             guard let monitor = controller.workspaceManager.monitors.first,
                   let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
             else {
-                Issue.record("Missing monitor or active workspace for resize placeholder fallback test")
+                Issue.record("Missing monitor or active workspace for observed size learning test")
                 return
             }
 
@@ -273,26 +273,30 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
                 )
             )
 
-            let createdPlaceholder = await waitForConditionForTests {
-                controller.resizePlaceholderManager.snapshotForTests()[token]?.frame == targetFrame
-                    && controller.workspaceManager.resizePlaceholderState(for: token)?.frame == targetFrame
+            let learnedMinimumSize = await waitForConditionForTests {
+                controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
+                    width: currentFrame.width,
+                    height: currentFrame.height
+                )
             }
 
-            #expect(createdPlaceholder)
-            #expect(controller.workspaceManager.resizePlaceholderState(for: token)?.minimumSize == CGSize(
+            #expect(learnedMinimumSize)
+            #expect(controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
                 width: currentFrame.width,
                 height: currentFrame.height
             ))
+            #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
+            #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
         }
     }
 
-    @Test @MainActor func executeLayoutPlanIgnoresSizeOnlyVerificationMismatchForResizePlaceholder() async {
+    @Test @MainActor func executeLayoutPlanLearnsObservedMinimumSizeAfterSizeOnlyVerificationMismatch() async {
         await withAXFrameProviderIsolationForTests {
             let controller = makeLayoutPlanTestController()
             guard let monitor = controller.workspaceManager.monitors.first,
                   let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
             else {
-                Issue.record("Missing monitor or active workspace for resize placeholder verification mismatch test")
+                Issue.record("Missing monitor or active workspace for verification mismatch size learning test")
                 return
             }
 
@@ -332,23 +336,27 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
                 )
             )
 
-            let completedRetry = await waitForConditionForTests {
-                controller.axManager.recentFrameWriteFailure(for: token.windowId) == .verificationMismatch
+            let learnedMinimumSize = await waitForConditionForTests {
+                controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
+                    width: observedFrame.width,
+                    height: observedFrame.height
+                )
             }
 
-            #expect(completedRetry)
+            #expect(learnedMinimumSize)
+            #expect(controller.axManager.recentFrameWriteFailure(for: token.windowId) == nil)
             #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
             #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
         }
     }
 
-    @Test @MainActor func executeLayoutPlanCreatesResizePlaceholderWhenVerificationMismatchHasConstraintProof() async {
+    @Test @MainActor func executeLayoutPlanExpandsKnownMinimumSizeWhenObservedFrameIsLarger() async {
         await withAXFrameProviderIsolationForTests {
             let controller = makeLayoutPlanTestController()
             guard let monitor = controller.workspaceManager.monitors.first,
                   let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
             else {
-                Issue.record("Missing monitor or active workspace for resize placeholder constraint proof test")
+                Issue.record("Missing monitor or active workspace for known minimum expansion test")
                 return
             }
 
@@ -397,13 +405,143 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
                 )
             )
 
-            let createdPlaceholder = await waitForConditionForTests {
-                controller.resizePlaceholderManager.snapshotForTests()[token]?.frame == targetFrame
-                    && controller.workspaceManager.resizePlaceholderState(for: token)?.frame == targetFrame
+            let learnedMinimumSize = await waitForConditionForTests {
+                controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
+                    width: observedFrame.width,
+                    height: observedFrame.height
+                )
             }
 
-            #expect(createdPlaceholder)
-            #expect(controller.workspaceManager.resizePlaceholderState(for: token)?.minimumSize == minimumSize)
+            #expect(learnedMinimumSize)
+            #expect(controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
+                width: observedFrame.width,
+                height: observedFrame.height
+            ))
+            #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
+            #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
+        }
+    }
+
+    @Test @MainActor func executeLayoutPlanLearnsObservedMaximumSizeWhenWindowCannotGrow() async {
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeLayoutPlanTestController()
+            guard let monitor = controller.workspaceManager.monitors.first,
+                  let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+            else {
+                Issue.record("Missing monitor or active workspace for observed max size learning test")
+                return
+            }
+
+            let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 119)
+            let targetFrame = CGRect(x: 40, y: 50, width: 900, height: 700)
+            let observedFrame = CGRect(x: 40, y: 50, width: 320, height: 220)
+
+            controller.axManager.frameApplyOverrideForTests = { requests in
+                requests.map { request in
+                    AXFrameApplyResult(
+                        requestId: request.requestId,
+                        pid: request.pid,
+                        windowId: request.windowId,
+                        targetFrame: request.frame,
+                        currentFrameHint: request.currentFrameHint,
+                        writeResult: layoutRefreshControllerTestWriteResult(
+                            targetFrame: request.frame,
+                            currentFrameHint: request.currentFrameHint,
+                            observedFrame: observedFrame,
+                            failureReason: .verificationMismatch
+                        )
+                    )
+                }
+            }
+
+            var diff = WorkspaceLayoutDiff()
+            diff.frameChanges = [
+                LayoutFrameChange(token: token, frame: targetFrame, forceApply: false)
+            ]
+
+            controller.layoutRefreshController.executeLayoutPlan(
+                WorkspaceLayoutPlan(
+                    workspaceId: workspaceId,
+                    monitor: controller.layoutRefreshController.buildMonitorSnapshot(for: monitor),
+                    sessionPatch: WorkspaceSessionPatch(workspaceId: workspaceId),
+                    diff: diff
+                )
+            )
+
+            let learnedMaximumSize = await waitForConditionForTests {
+                controller.workspaceManager.cachedConstraints(for: token)?.maxSize == CGSize(
+                    width: observedFrame.width,
+                    height: observedFrame.height
+                )
+            }
+
+            #expect(learnedMaximumSize)
+            #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
+            #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
+        }
+    }
+
+    @Test @MainActor func executeLayoutPlanLearnsObservedMaximumSizeWhenLiveFrameAlreadyShowsSmallWindow() async {
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeLayoutPlanTestController()
+            guard let monitor = controller.workspaceManager.monitors.first,
+                  let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+            else {
+                Issue.record("Missing monitor or active workspace for live max size learning test")
+                return
+            }
+
+            let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 120)
+            let targetFrame = CGRect(x: 40, y: 50, width: 900, height: 700)
+            let observedFrame = CGRect(x: 40, y: 50, width: 320, height: 220)
+
+            AXWindowService.fastFrameProviderForTests = { window in
+                window.windowId == token.windowId ? observedFrame : fallbackFastFrameForTests(window)
+            }
+            defer {
+                AXWindowService.fastFrameProviderForTests = nil
+            }
+
+            controller.axManager.frameApplyOverrideForTests = { requests in
+                requests.map { request in
+                    AXFrameApplyResult(
+                        requestId: request.requestId,
+                        pid: request.pid,
+                        windowId: request.windowId,
+                        targetFrame: request.frame,
+                        currentFrameHint: request.currentFrameHint,
+                        writeResult: layoutRefreshControllerTestWriteResult(
+                            targetFrame: request.frame,
+                            currentFrameHint: request.currentFrameHint,
+                            observedFrame: observedFrame,
+                            failureReason: .verificationMismatch
+                        )
+                    )
+                }
+            }
+
+            var diff = WorkspaceLayoutDiff()
+            diff.frameChanges = [
+                LayoutFrameChange(token: token, frame: targetFrame, forceApply: false)
+            ]
+
+            controller.layoutRefreshController.executeLayoutPlan(
+                WorkspaceLayoutPlan(
+                    workspaceId: workspaceId,
+                    monitor: controller.layoutRefreshController.buildMonitorSnapshot(for: monitor),
+                    sessionPatch: WorkspaceSessionPatch(workspaceId: workspaceId),
+                    diff: diff
+                )
+            )
+
+            let learnedMaximumSize = await waitForConditionForTests {
+                controller.workspaceManager.cachedConstraints(for: token)?.maxSize == CGSize(
+                    width: observedFrame.width,
+                    height: observedFrame.height
+                )
+            }
+
+            #expect(learnedMaximumSize)
         }
     }
 

@@ -178,6 +178,7 @@ import QuartzCore
     private var activeFrameContext: RefreshFrameContext?
     private var pendingRevealTransactionsByWindowId: [Int: PendingRevealTransaction] = [:]
     private var pendingRevealVerificationTasksByWindowId: [Int: Task<Void, Never>] = [:]
+    private var observedLayoutConstraintTokens: Set<WindowToken> = []
 
     func fastFrame(for token: WindowToken, axRef: AXWindowRef) -> CGRect? {
         activeFrameContext?.fastFrame(for: token, axRef: axRef)
@@ -557,7 +558,11 @@ import QuartzCore
                 LayoutWindowSnapshot(
                     token: entry.token,
                     constraints: mergedConstraints,
-                    layoutConstraints: mergedConstraints.relaxedForResizePlaceholder(),
+                    layoutConstraints: shouldUseObservedLayoutConstraints(
+                        for: entry.token
+                    )
+                        ? mergedConstraints
+                        : mergedConstraints.relaxedForResizePlaceholder(),
                     hiddenState: controller.workspaceManager.hiddenState(for: entry.token),
                     layoutReason: layoutReason,
                     showsNativeFullscreenPlaceholder: controller.workspaceManager
@@ -2925,22 +2930,16 @@ import QuartzCore
         entry: WindowModel.Entry,
         targetFrame: CGRect
     ) -> Bool {
+        shouldObserveAdaptiveFrameResult(entry: entry, targetFrame: targetFrame)
+    }
+
+    private func shouldObserveAdaptiveFrameResult(
+        entry: WindowModel.Entry,
+        targetFrame _: CGRect
+    ) -> Bool {
         guard controller?.workspaceManager.resizePlaceholderState(for: entry.token) == nil else { return false }
         guard entry.layoutReason == .standard else { return false }
         guard controller?.workspaceManager.hiddenState(for: entry.token) == nil else { return false }
-        if let constraints = controller?.workspaceManager.cachedConstraints(for: entry.token),
-           targetFrameIsBelowMinimumSize(targetFrame, minimumSize: constraints.minSize)
-        {
-            return true
-        }
-        if let currentFrame = fastFrame(for: entry.token, axRef: entry.axRef) {
-            return targetSizeIsSmallerThanObservedSize(targetFrame.size, observedSize: currentFrame.size)
-        }
-        if let lastAppliedFrame = controller?.axManager.lastAppliedFrame(for: entry.windowId),
-           !targetSizeIsSmallerThanObservedSize(targetFrame.size, observedSize: lastAppliedFrame.size)
-        {
-            return false
-        }
         return true
     }
 
@@ -2965,6 +2964,10 @@ import QuartzCore
 
         if liveFrameMatchesTarget(for: entry, targetFrame: result.targetFrame) {
             controller.axManager.confirmFrameWrite(for: result.windowId, frame: result.targetFrame)
+            return
+        }
+
+        if adaptLayoutToObservedWindowSizeIfNeeded(result, entry: entry, workspaceId: workspaceId) {
             return
         }
 
@@ -3039,6 +3042,89 @@ import QuartzCore
         }
     }
 
+    private func adaptLayoutToObservedWindowSizeIfNeeded(
+        _ result: AXFrameApplyResult,
+        entry: WindowModel.Entry,
+        workspaceId: WorkspaceDescriptor.ID
+    ) -> Bool {
+        guard let controller,
+              entry.layoutReason == .standard,
+              controller.workspaceManager.hiddenState(for: entry.token) == nil,
+              let observedFrame = result.writeResult.observedFrame,
+              targetSizeDiffersFromObservedSize(result.targetFrame.size, observedSize: observedFrame.size),
+              observedFrame.width.isFinite,
+              observedFrame.height.isFinite,
+              observedFrame.width > 1,
+              observedFrame.height > 1
+        else {
+            return false
+        }
+
+        let constraints = resizePlaceholderFallbackConstraints(for: entry, observedFrame: observedFrame)
+        var learnedConstraints = constraints
+
+        if result.targetFrame.width + 0.5 < observedFrame.width {
+            learnedConstraints.minSize.width = max(
+                learnedConstraints.minSize.width,
+                observedFrame.width.rounded(.up)
+            )
+        }
+        if result.targetFrame.width > observedFrame.width + 0.5 {
+            learnedConstraints.minSize.width = min(learnedConstraints.minSize.width, observedFrame.width.rounded(.down))
+            learnedConstraints.maxSize.width = observedFrame.width.rounded(.down)
+        }
+        if result.targetFrame.height + 0.5 < observedFrame.height {
+            learnedConstraints.minSize.height = max(
+                learnedConstraints.minSize.height,
+                observedFrame.height.rounded(.up)
+            )
+        }
+        if result.targetFrame.height > observedFrame.height + 0.5 {
+            learnedConstraints.minSize.height = min(learnedConstraints.minSize.height, observedFrame.height.rounded(.down))
+            learnedConstraints.maxSize.height = observedFrame.height.rounded(.down)
+        }
+
+        learnedConstraints = learnedConstraints.normalized()
+
+        controller.workspaceManager.setCachedConstraints(learnedConstraints, for: entry.token)
+        observedLayoutConstraintTokens.insert(entry.token)
+        controller.niriEngine?.updateWindowConstraints(for: entry.token, constraints: learnedConstraints)
+        controller.dwindleEngine?.updateWindowConstraints(for: entry.token, constraints: learnedConstraints)
+        adaptNiriContainerToObservedWindowSize(entry: entry, workspaceId: workspaceId, observedSize: observedFrame.size)
+        controller.axManager.confirmFrameWrite(for: result.windowId, frame: observedFrame)
+        controller.clearResizePlaceholder(for: entry.token)
+        requestRelayout(reason: .axWindowChanged, affectedWorkspaceIds: [workspaceId])
+        return true
+    }
+
+    private func adaptNiriContainerToObservedWindowSize(
+        entry: WindowModel.Entry,
+        workspaceId: WorkspaceDescriptor.ID,
+        observedSize: CGSize
+    ) {
+        guard let controller,
+              let engine = controller.niriEngine,
+              let monitor = controller.workspaceManager.monitor(for: workspaceId)
+        else {
+            return
+        }
+
+        let orientation = engine.monitor(for: monitor.id)?.orientation
+            ?? controller.settings.effectiveOrientation(for: monitor)
+        engine.adaptWindowContainerToObservedSize(
+            token: entry.token,
+            observedSize: observedSize,
+            in: workspaceId,
+            orientation: orientation
+        )
+    }
+
+    private func shouldUseObservedLayoutConstraints(
+        for token: WindowToken
+    ) -> Bool {
+        observedLayoutConstraintTokens.contains(token)
+    }
+
     private func resizePlaceholderFallbackConstraints(
         for entry: WindowModel.Entry,
         observedFrame: CGRect?
@@ -3064,6 +3150,11 @@ import QuartzCore
     private func targetSizeIsSmallerThanObservedSize(_ targetSize: CGSize, observedSize: CGSize) -> Bool {
         targetSize.width + 0.5 < observedSize.width
             || targetSize.height + 0.5 < observedSize.height
+    }
+
+    private func targetSizeDiffersFromObservedSize(_ targetSize: CGSize, observedSize: CGSize) -> Bool {
+        abs(targetSize.width - observedSize.width) > 0.5
+            || abs(targetSize.height - observedSize.height) > 0.5
     }
 
     private func fallbackResizeMinimumSize(

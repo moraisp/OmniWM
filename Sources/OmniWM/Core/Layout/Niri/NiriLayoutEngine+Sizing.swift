@@ -474,6 +474,54 @@ extension NiriLayoutEngine {
         )
     }
 
+    @discardableResult
+    func adaptWindowContainerToObservedSize(
+        token: WindowToken,
+        observedSize: CGSize,
+        in workspaceId: WorkspaceDescriptor.ID,
+        orientation: Monitor.Orientation
+    ) -> Bool {
+        guard observedSize.width.isFinite,
+              observedSize.height.isFinite,
+              observedSize.width > 1,
+              observedSize.height > 1,
+              let window = findNode(for: token),
+              window.sizingMode == .normal,
+              let column = findColumn(containing: window, in: workspaceId)
+        else {
+            return false
+        }
+
+        cancelInteractiveResize(for: column, in: workspaceId)
+
+        switch orientation {
+        case .horizontal:
+            let targetColumnWidth = columnWidth(forWindowWidth: observedSize.width, in: column)
+            column.width = .fixed(targetColumnWidth)
+            column.cachedWidth = targetColumnWidth
+            column.widthAnimation = nil
+            column.targetWidth = nil
+            column.presetWidthIdx = nil
+            column.isFullWidth = false
+            column.savedWidth = nil
+            column.hasManualSingleWindowWidthOverride = true
+
+            window.height = .fixed(observedSize.height)
+            window.savedHeight = nil
+            window.resolvedHeight = observedSize.height
+        case .vertical:
+            column.height = .fixed(observedSize.height)
+            column.cachedHeight = observedSize.height
+            column.isFullHeight = false
+            column.savedHeight = nil
+
+            window.windowWidth = .fixed(observedSize.width)
+            window.resolvedWidth = observedSize.width
+        }
+
+        return true
+    }
+
     func toggleFullWidth(
         _ column: NiriContainer,
         in workspaceId: WorkspaceDescriptor.ID,

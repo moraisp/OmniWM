@@ -725,11 +725,17 @@ extension NiriLayoutEngine {
         let windowRenderOffsets = windows.map { $0.renderOffset(at: time) }
         let windowTokens = windows.map { $0.token }
 
-        var pos: CGFloat = switch orientation {
-        case .horizontal: contentRect.origin.y
-        case .vertical: contentRect.origin.x
+        var pos: CGFloat
+        switch orientation {
+        case .horizontal:
+            let usedHeight = isTabbed
+                ? (resolvedSpans.max() ?? 0) + secondaryGap * 2
+                : resolvedSpans.reduce(0, +) + secondaryGap * CGFloat(windows.count + 1)
+            let centeredOffset = max(0, contentRect.height - usedHeight) / 2
+            pos = contentRect.origin.y + secondaryGap + centeredOffset
+        case .vertical:
+            pos = contentRect.origin.x + secondaryGap
         }
-        pos += secondaryGap
 
         for i in 0 ..< windows.count {
             let span = resolvedSpans[i]
