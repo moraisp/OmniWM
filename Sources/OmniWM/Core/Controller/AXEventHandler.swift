@@ -396,6 +396,8 @@ final class AXEventHandler: CGSEventDelegate {
                     pid: pid_t(windowInfo.pid)
                 )
                 scheduleWindowRuleReevaluationIfNeeded(targets: [.pid(pid_t(windowInfo.pid))])
+            } else {
+                _ = scheduleCreatedWindowInfoRetryIfNeeded(windowId: windowId)
             }
             return
         }
@@ -657,25 +659,24 @@ final class AXEventHandler: CGSEventDelegate {
 
         for windowId in deferredWindowIds {
             guard let controller else { return }
-            guard let token = resolveWindowToken(windowId) else {
-                discardCreatePlacementContext(windowId: windowId)
+            guard let windowInfo = resolveWindowInfo(windowId) else {
+                _ = scheduleCreatedWindowInfoRetryIfNeeded(windowId: windowId)
                 continue
             }
+            let token = WindowToken(pid: pid_t(windowInfo.pid), windowId: Int(windowId))
             if controller.workspaceManager.entry(for: token) != nil {
                 discardCreatePlacementContext(windowId: windowId)
                 continue
             }
             guard let candidate = prepareCreateCandidate(
                 windowId: windowId,
-                windowInfo: resolveWindowInfo(windowId),
+                windowInfo: windowInfo,
                 createPlacementContext: createPlacementContextsByWindowId[windowId]
             ) else {
-                if let windowInfo = resolveWindowInfo(windowId) {
-                    _ = scheduleCreatedWindowRetryIfNeeded(
-                        windowId: windowId,
-                        pid: pid_t(windowInfo.pid)
-                    )
-                }
+                _ = scheduleCreatedWindowRetryIfNeeded(
+                    windowId: windowId,
+                    pid: pid_t(windowInfo.pid)
+                )
                 continue
             }
             cancelCreatedWindowRetry(windowId: windowId)
@@ -2364,24 +2365,52 @@ final class AXEventHandler: CGSEventDelegate {
             return false
         }
 
-        createdWindowRetryCountById[windowId] = attempt
-        pendingCreatedWindowRetryTasks.removeValue(forKey: windowId)?.cancel()
-        recordNiriCreateFocusTrace(
-            .init(
-                kind: .createRetryScheduled(
-                    windowId: windowId,
-                    pid: pid,
-                    attempt: attempt
-                )
+        enqueueCreatedWindowRetry(
+            windowId: windowId,
+            attempt: attempt,
+            traceKind: .createRetryScheduled(
+                windowId: windowId,
+                pid: pid,
+                attempt: attempt
             )
         )
+        return true
+    }
+
+    private func scheduleCreatedWindowInfoRetryIfNeeded(windowId: UInt32) -> Bool {
+        guard let controller else { return false }
+        guard !controller.isOwnedWindow(windowNumber: Int(windowId)) else {
+            cancelCreatedWindowRetry(windowId: windowId)
+            discardCreatePlacementContext(windowId: windowId)
+            return false
+        }
+
+        let attempt = createdWindowRetryCountById[windowId, default: 0] + 1
+        guard attempt <= Self.createdWindowRetryLimit else {
+            discardCreatePlacementContext(windowId: windowId)
+            return false
+        }
+
+        enqueueCreatedWindowRetry(windowId: windowId, attempt: attempt, traceKind: nil)
+        return true
+    }
+
+    private func enqueueCreatedWindowRetry(
+        windowId: UInt32,
+        attempt: Int,
+        traceKind: NiriCreateFocusTraceEvent.Kind?
+    ) {
+        createdWindowRetryCountById[windowId] = attempt
+        pendingCreatedWindowRetryTasks.removeValue(forKey: windowId)?.cancel()
+        if let traceKind {
+            recordNiriCreateFocusTrace(.init(kind: traceKind))
+        }
         pendingCreatedWindowRetryTasks[windowId] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.stabilizationRetryDelay)
             guard !Task.isCancelled, let self else { return }
             self.pendingCreatedWindowRetryTasks.removeValue(forKey: windowId)
             self.processCreatedWindow(windowId: windowId)
         }
-        return true
     }
 
     private func cancelCreatedWindowRetry(windowId: UInt32) {

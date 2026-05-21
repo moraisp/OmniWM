@@ -588,6 +588,49 @@ private func waitUntilAXEventTest(
         }
     }
 
+    @Test @MainActor func createdWindowRetriesWhenWindowServerInfoIsInitiallyUnavailable() async {
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeAXEventTestController()
+            var relayoutReasons: [RefreshReason] = []
+            var windowInfoReady = false
+            var windowInfoLookupCount = 0
+
+            controller.axEventHandler.windowInfoProvider = { windowId in
+                guard windowId == 820 else { return nil }
+                windowInfoLookupCount += 1
+                guard windowInfoReady else { return nil }
+                return WindowServerInfo(id: windowId, pid: getpid(), level: 0, frame: .zero)
+            }
+            controller.axEventHandler.axWindowRefProvider = { windowId, _ in
+                guard windowId == 820 else { return nil }
+                return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(windowId))
+            }
+            controller.axEventHandler.windowFactsProvider = { _, _ in
+                makeAXEventWindowRuleFacts(bundleId: "com.example.info-retry")
+            }
+            controller.layoutRefreshController.resetDebugState()
+            controller.layoutRefreshController.debugHooks.onRelayout = { reason, _ in
+                relayoutReasons.append(reason)
+                return true
+            }
+
+            controller.axEventHandler.cgsEventObserver(
+                CGSEventObserver.shared,
+                didReceive: .created(windowId: 820, spaceId: 0)
+            )
+            windowInfoReady = true
+
+            await waitUntilAXEventTest(iterations: 300) {
+                controller.workspaceManager.entry(forPid: getpid(), windowId: 820) != nil &&
+                    relayoutReasons == [.axWindowCreated]
+            }
+
+            #expect(windowInfoLookupCount >= 2)
+            #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 820)?.mode == .tiling)
+            #expect(controller.axEventHandler.pendingCreatePlacementContext(for: 820) == nil)
+        }
+    }
+
     @Test @MainActor func createdWindowRetryUsesFreshMonitorWorkspaceAfterActiveWorkspaceChanges() async {
         await withAXFrameProviderIsolationForTests {
             let controller = makeAXEventTestController()
@@ -3704,6 +3747,63 @@ private func waitUntilAXEventTest(
         #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 821)?.workspaceId == laterWorkspaceId)
         #expect(controller.workspaceManager.allEntries().filter { $0.windowId == 821 }.count == 1)
         #expect(subscriptions == [[821]])
+    }
+
+    @Test @MainActor func deferredCreatedWindowRetriesWhenWindowServerInfoIsUnavailableDuringDrain() async {
+        let controller = makeAXEventTestController()
+        guard let monitor = controller.monitorForInteraction(),
+              let laterWorkspaceId = controller.workspaceManager.workspaceId(for: "2", createIfMissing: false)
+        else {
+            Issue.record("Missing active workspace")
+            return
+        }
+
+        var subscriptions: [[UInt32]] = []
+        var windowInfoReady = false
+        var windowInfoLookupCount = 0
+        controller.axEventHandler.windowInfoProvider = { windowId in
+            guard windowId == 840 else { return nil }
+            windowInfoLookupCount += 1
+            guard windowInfoReady else { return nil }
+            return WindowServerInfo(id: windowId, pid: getpid(), level: 0, frame: .zero)
+        }
+        controller.axEventHandler.axWindowRefProvider = { windowId, _ in
+            guard windowId == 840 else { return nil }
+            return AXWindowRef(element: AXUIElementCreateSystemWide(), windowId: Int(windowId))
+        }
+        controller.axEventHandler.windowFactsProvider = { _, _ in
+            makeAXEventWindowRuleFacts(bundleId: "com.example.deferred-info-retry")
+        }
+        controller.axEventHandler.windowSubscriptionHandler = { windowIds in
+            subscriptions.append(windowIds)
+        }
+        controller.axEventHandler.spaceDisplayResolver = { spaceId, _ in
+            spaceId == 20 ? monitor.displayId : nil
+        }
+
+        controller.layoutRefreshController.layoutState.isFullEnumerationInProgress = true
+        controller.axEventHandler.cgsEventObserver(
+            CGSEventObserver.shared,
+            didReceive: .created(windowId: 840, spaceId: 20)
+        )
+        #expect(controller.workspaceManager.setActiveWorkspace(laterWorkspaceId, on: monitor.id))
+        controller.layoutRefreshController.layoutState.isFullEnumerationInProgress = false
+
+        await controller.axEventHandler.drainDeferredCreatedWindows()
+        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 840) == nil)
+        #expect(controller.axEventHandler.pendingCreatePlacementContext(for: 840) != nil)
+        #expect(subscriptions.isEmpty)
+
+        windowInfoReady = true
+        await waitUntilAXEventTest(iterations: 300) {
+            controller.workspaceManager.entry(forPid: getpid(), windowId: 840) != nil
+        }
+
+        #expect(windowInfoLookupCount >= 2)
+        #expect(controller.workspaceManager.entry(forPid: getpid(), windowId: 840)?.workspaceId == laterWorkspaceId)
+        #expect(controller.workspaceManager.allEntries().filter { $0.windowId == 840 }.count == 1)
+        #expect(subscriptions == [[840]])
+        #expect(controller.axEventHandler.pendingCreatePlacementContext(for: 840) == nil)
     }
 
     @Test @MainActor func fullRescanUsesPendingCreateMonitorForUntrackedWindow() async {
