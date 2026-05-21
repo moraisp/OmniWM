@@ -642,6 +642,115 @@ private func makeCenteredCrossMonitorFixture(
         return state
     }
 
+    @MainActor
+    private func makeNavigateToWindowViewportFixture(
+        centerFocusedColumn: CenterFocusedColumn,
+        alwaysCenterSingleColumn: Bool,
+        maxVisibleColumns: Int,
+        windowCount: Int,
+        outerGapLeft: Double = 0,
+        outerGapRight: Double = 0
+    ) async throws -> (
+        controller: WMController,
+        workspaceId: WorkspaceDescriptor.ID,
+        monitor: Monitor,
+        columns: [NiriContainer],
+        windows: [NiriWindow],
+        gap: CGFloat,
+        workingFrame: CGRect
+    ) {
+        let controller = makeLayoutPlanTestController()
+        guard let monitor = controller.workspaceManager.monitors.first,
+              let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+        else {
+            fatalError("Missing monitor or active workspace for navigate-to-window viewport fixture")
+        }
+
+        controller.settings.niriMaxWindowsPerColumn = 1
+        controller.settings.niriMaxVisibleColumns = maxVisibleColumns
+        controller.settings.niriCenterFocusedColumn = centerFocusedColumn
+        controller.settings.niriAlwaysCenterSingleColumn = alwaysCenterSingleColumn
+        controller.setOuterGaps(left: outerGapLeft, right: outerGapRight, top: 0, bottom: 0)
+        controller.enableNiriLayout(
+            maxWindowsPerColumn: 1,
+            centerFocusedColumn: centerFocusedColumn,
+            alwaysCenterSingleColumn: alwaysCenterSingleColumn
+        )
+        controller.updateNiriConfig(
+            maxVisibleColumns: maxVisibleColumns,
+            centerFocusedColumn: centerFocusedColumn,
+            alwaysCenterSingleColumn: alwaysCenterSingleColumn
+        )
+        await waitForLayoutPlanRefreshWork(on: controller)
+        controller.syncMonitorsToNiriEngine()
+
+        guard let engine = controller.niriEngine else {
+            fatalError("Expected Niri engine for navigate-to-window viewport fixture")
+        }
+
+        for windowOffset in 0 ..< windowCount {
+            _ = addLayoutPlanTestWindow(
+                on: controller,
+                workspaceId: workspaceId,
+                windowId: 8_100 + windowOffset
+            )
+        }
+
+        let initialPlans = try await controller.niriLayoutHandler.layoutWithNiriEngine(
+            activeWorkspaces: [workspaceId]
+        )
+        controller.layoutRefreshController.executeLayoutPlans(initialPlans)
+
+        let gap = CGFloat(controller.workspaceManager.gaps)
+        let workingFrame = controller.insetWorkingFrame(for: monitor)
+        let fixedWidth = (
+            workingFrame.width - gap * CGFloat(maxVisibleColumns - 1)
+        ) / CGFloat(maxVisibleColumns)
+        for column in engine.columns(in: workspaceId) {
+            column.width = .fixed(fixedWidth)
+            column.cachedWidth = fixedWidth
+        }
+
+        let columns = engine.columns(in: workspaceId)
+        let windows = columns.compactMap(\.windowNodes.first)
+        guard windows.count == windowCount else {
+            fatalError("Expected \(windowCount) navigate-to-window test windows")
+        }
+
+        return (controller, workspaceId, monitor, columns, windows, gap, workingFrame)
+    }
+
+    @MainActor
+    private func setNavigateToWindowSelection(
+        controller: WMController,
+        workspaceId: WorkspaceDescriptor.ID,
+        monitor: Monitor,
+        columns: [NiriContainer],
+        windows: [NiriWindow],
+        gap: CGFloat,
+        activeIndex: Int,
+        viewportStart: CGFloat,
+        selectionProgress: CGFloat = 0
+    ) {
+        let node = windows[activeIndex]
+        controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
+            state.selectedNodeId = node.id
+            state.activeColumnIndex = activeIndex
+            state.viewOffsetPixels = .static(
+                viewportStart - state.columnX(at: activeIndex, columns: columns, gap: gap)
+            )
+            state.selectionProgress = selectionProgress
+        }
+        _ = controller.workspaceManager.setManagedFocus(node.token, in: workspaceId, onMonitor: monitor.id)
+        _ = controller.workspaceManager.commitWorkspaceSelection(
+            nodeId: node.id,
+            focusedToken: node.token,
+            in: workspaceId,
+            onMonitor: monitor.id
+        )
+        controller.layoutRefreshController.stopAllScrollAnimations()
+    }
+
     private func settledLayoutState(
         from state: ViewportState,
         column: NiriContainer?,
@@ -7419,6 +7528,156 @@ private func makeCenteredCrossMonitorFixture(
         #expect(updatedState.selectedNodeId == windows[3].id)
         #expect(updatedState.activeColumnIndex == 3)
         #expect(abs(viewportStart(for: updatedState, columns: columns, gap: gap) - initialViewStart) < 0.1)
+    }
+
+    @Test @MainActor func navigateToWindowInternalUsesVisibleFitWhenCenteringIsNever() async throws {
+        let fixture = try await makeNavigateToWindowViewportFixture(
+            centerFocusedColumn: .never,
+            alwaysCenterSingleColumn: false,
+            maxVisibleColumns: 2,
+            windowCount: 4,
+            outerGapLeft: 12,
+            outerGapRight: 20
+        )
+        #expect(fixture.workingFrame.width != fixture.monitor.visibleFrame.width)
+        let startIndex = 0
+        let targetIndex = 1
+        let initialViewStart: CGFloat = 0
+        setNavigateToWindowSelection(
+            controller: fixture.controller,
+            workspaceId: fixture.workspaceId,
+            monitor: fixture.monitor,
+            columns: fixture.columns,
+            windows: fixture.windows,
+            gap: fixture.gap,
+            activeIndex: startIndex,
+            viewportStart: initialViewStart,
+            selectionProgress: 32
+        )
+
+        let targetWindow = fixture.windows[targetIndex]
+        #expect(
+            fixture.controller.windowActionHandler.navigateToWindowInternal(
+                token: targetWindow.token,
+                workspaceId: fixture.workspaceId
+            )
+        )
+
+        let updatedState = fixture.controller.workspaceManager.niriViewportState(for: fixture.workspaceId)
+        let expectedViewStart = niriExpectedViewportStart(
+            columns: fixture.columns,
+            gap: fixture.gap,
+            viewportWidth: fixture.workingFrame.width,
+            currentViewStart: initialViewStart,
+            targetIndex: targetIndex,
+            centerMode: .never,
+            fromIndex: startIndex
+        )
+        let centeredViewStart = niriExpectedViewportStart(
+            columns: fixture.columns,
+            gap: fixture.gap,
+            viewportWidth: fixture.workingFrame.width,
+            currentViewStart: initialViewStart,
+            targetIndex: targetIndex,
+            centerMode: .always,
+            fromIndex: startIndex
+        )
+
+        #expect(updatedState.selectedNodeId == targetWindow.id)
+        #expect(updatedState.activeColumnIndex == targetIndex)
+        #expect(updatedState.selectionProgress == 0)
+        #expect(abs(viewportStart(for: updatedState, columns: fixture.columns, gap: fixture.gap) - expectedViewStart) < 0.1)
+        #expect(abs(viewportStart(for: updatedState, columns: fixture.columns, gap: fixture.gap) - centeredViewStart) > 1)
+    }
+
+    @Test @MainActor func navigateToWindowInternalStillCentersWhenCenteringIsAlways() async throws {
+        let fixture = try await makeNavigateToWindowViewportFixture(
+            centerFocusedColumn: .always,
+            alwaysCenterSingleColumn: false,
+            maxVisibleColumns: 2,
+            windowCount: 4
+        )
+        let startIndex = 0
+        let targetIndex = 1
+        let initialViewStart: CGFloat = 0
+        setNavigateToWindowSelection(
+            controller: fixture.controller,
+            workspaceId: fixture.workspaceId,
+            monitor: fixture.monitor,
+            columns: fixture.columns,
+            windows: fixture.windows,
+            gap: fixture.gap,
+            activeIndex: startIndex,
+            viewportStart: initialViewStart
+        )
+
+        let targetWindow = fixture.windows[targetIndex]
+        #expect(
+            fixture.controller.windowActionHandler.navigateToWindowInternal(
+                token: targetWindow.token,
+                workspaceId: fixture.workspaceId
+            )
+        )
+
+        let updatedState = fixture.controller.workspaceManager.niriViewportState(for: fixture.workspaceId)
+        let expectedViewStart = niriExpectedViewportStart(
+            columns: fixture.columns,
+            gap: fixture.gap,
+            viewportWidth: fixture.workingFrame.width,
+            currentViewStart: initialViewStart,
+            targetIndex: targetIndex,
+            centerMode: .always,
+            fromIndex: startIndex
+        )
+
+        #expect(updatedState.selectedNodeId == targetWindow.id)
+        #expect(updatedState.activeColumnIndex == targetIndex)
+        #expect(abs(viewportStart(for: updatedState, columns: fixture.columns, gap: fixture.gap) - expectedViewStart) < 0.1)
+    }
+
+    @Test @MainActor func navigateToWindowInternalCentersSingleColumnWhenConfigured() async throws {
+        let fixture = try await makeNavigateToWindowViewportFixture(
+            centerFocusedColumn: .never,
+            alwaysCenterSingleColumn: true,
+            maxVisibleColumns: 2,
+            windowCount: 1
+        )
+        let startIndex = 0
+        let targetIndex = 0
+        let initialViewStart: CGFloat = 0
+        setNavigateToWindowSelection(
+            controller: fixture.controller,
+            workspaceId: fixture.workspaceId,
+            monitor: fixture.monitor,
+            columns: fixture.columns,
+            windows: fixture.windows,
+            gap: fixture.gap,
+            activeIndex: startIndex,
+            viewportStart: initialViewStart
+        )
+
+        let targetWindow = fixture.windows[targetIndex]
+        #expect(
+            fixture.controller.windowActionHandler.navigateToWindowInternal(
+                token: targetWindow.token,
+                workspaceId: fixture.workspaceId
+            )
+        )
+
+        let updatedState = fixture.controller.workspaceManager.niriViewportState(for: fixture.workspaceId)
+        let expectedViewStart = niriExpectedViewportStart(
+            columns: fixture.columns,
+            gap: fixture.gap,
+            viewportWidth: fixture.workingFrame.width,
+            currentViewStart: initialViewStart,
+            targetIndex: targetIndex,
+            centerMode: .always,
+            fromIndex: startIndex
+        )
+
+        #expect(updatedState.selectedNodeId == targetWindow.id)
+        #expect(updatedState.activeColumnIndex == targetIndex)
+        #expect(abs(viewportStart(for: updatedState, columns: fixture.columns, gap: fixture.gap) - expectedViewStart) < 0.1)
     }
 
     @Test @MainActor func focusNeighborRoundTripUsesPaddedViewportOffsets() async throws {

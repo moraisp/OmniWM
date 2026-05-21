@@ -418,12 +418,22 @@ final class WindowActionHandler {
 
                 let cols = engine.columns(in: workspaceId)
                 let gap = CGFloat(controller.workspaceManager.gaps)
-                targetState.snapToColumn(
+                let settings = engine.effectiveSettings(in: workspaceId)
+                let workingFrame = controller.insetWorkingFrame(for: monitor)
+                targetState.transitionToColumn(
                     colIdx,
                     columns: cols,
                     gap: gap,
-                    viewportWidth: monitor.visibleFrame.width
+                    viewportWidth: workingFrame.width,
+                    motion: .disabled,
+                    animate: false,
+                    centerMode: settings.centerFocusedColumn,
+                    alwaysCenterSingleColumn: settings.alwaysCenterSingleColumn,
+                    scale: engine.displayScale(in: workspaceId),
+                    workingArea: workingFrame,
+                    viewFrame: monitor.frame
                 )
+                targetState.selectionProgress = 0
             }
         }
 
