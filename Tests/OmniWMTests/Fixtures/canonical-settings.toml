@@ -289,7 +289,7 @@ binding = "Option+Right Arrow"
 id = "focus.right"
 
 [[hotkeys]]
-binding = "Option+Tab"
+binding = "Unassigned"
 id = "focusPrevious"
 
 [[hotkeys]]
@@ -333,11 +333,11 @@ binding = "Unassigned"
 id = "centerVisibleColumns"
 
 [[hotkeys]]
-binding = "Control+Option+Shift+Up Arrow"
+binding = "Option+Shift+Up Arrow"
 id = "moveWindowToWorkspaceUp"
 
 [[hotkeys]]
-binding = "Control+Option+Shift+Down Arrow"
+binding = "Option+Shift+Down Arrow"
 id = "moveWindowToWorkspaceDown"
 
 [[hotkeys]]
@@ -385,19 +385,19 @@ binding = "Unassigned"
 id = "moveColumnToWorkspace.8"
 
 [[hotkeys]]
-binding = "Option+Shift+Left Arrow"
+binding = "Unassigned"
 id = "move.left"
 
 [[hotkeys]]
-binding = "Option+Shift+Down Arrow"
+binding = "Unassigned"
 id = "move.down"
 
 [[hotkeys]]
-binding = "Option+Shift+Up Arrow"
+binding = "Unassigned"
 id = "move.up"
 
 [[hotkeys]]
-binding = "Option+Shift+Right Arrow"
+binding = "Unassigned"
 id = "move.right"
 
 [[hotkeys]]
@@ -433,7 +433,7 @@ binding = "Unassigned"
 id = "expelWindowFromColumn"
 
 [[hotkeys]]
-binding = "Control+Command+Tab"
+binding = "Option+Tab"
 id = "focusMonitorNext"
 
 [[hotkeys]]
@@ -445,7 +445,7 @@ binding = "Control+Command+`"
 id = "focusMonitorLast"
 
 [[hotkeys]]
-binding = "Option+Return"
+binding = "Option+Shift+F"
 id = "toggleFullscreen"
 
 [[hotkeys]]
@@ -453,11 +453,11 @@ binding = "Unassigned"
 id = "toggleNativeFullscreen"
 
 [[hotkeys]]
-binding = "Control+Option+Shift+Left Arrow"
+binding = "Option+Shift+Left Arrow"
 id = "moveColumn.left"
 
 [[hotkeys]]
-binding = "Control+Option+Shift+Right Arrow"
+binding = "Option+Shift+Right Arrow"
 id = "moveColumn.right"
 
 [[hotkeys]]
@@ -613,7 +613,7 @@ binding = "Unassigned"
 id = "cycleWindowHeightBackward"
 
 [[hotkeys]]
-binding = "Option+Shift+F"
+binding = "Unassigned"
 id = "toggleColumnFullWidth"
 
 [[hotkeys]]
@@ -649,7 +649,7 @@ binding = "Option+Shift+="
 id = "setWindowHeight.increase10Percent"
 
 [[hotkeys]]
-binding = "Option+Shift+B"
+binding = "Option+/"
 id = "balanceSizes"
 
 [[hotkeys]]
@@ -729,7 +729,7 @@ binding = "Unassigned"
 id = "rescueOffscreenWindows"
 
 [[hotkeys]]
-binding = "Unassigned"
+binding = "Option+F"
 id = "toggleFocusedWindowFloating"
 
 [[hotkeys]]

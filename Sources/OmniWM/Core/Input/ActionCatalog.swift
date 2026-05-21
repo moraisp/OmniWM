@@ -185,7 +185,7 @@ enum ActionCatalog {
                 id: "focusPrevious",
                 command: .focusPrevious,
                 category: .focus,
-                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(optionKey)),
+                binding: .unassigned,
                 keywords: ["last focused", "recent window"]
             )
         )
@@ -226,7 +226,7 @@ enum ActionCatalog {
                 id: "moveWindowToWorkspaceUp",
                 command: .moveWindowToWorkspaceUp,
                 category: .workspace,
-                binding: KeyBinding(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | controlKey | shiftKey))
+                binding: KeyBinding(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | shiftKey))
             ),
             action(
                 id: "moveWindowToWorkspaceDown",
@@ -234,7 +234,7 @@ enum ActionCatalog {
                 category: .workspace,
                 binding: KeyBinding(
                     keyCode: UInt32(kVK_DownArrow),
-                    modifiers: UInt32(optionKey | controlKey | shiftKey)
+                    modifiers: UInt32(optionKey | shiftKey)
                 )
             ),
             action(
@@ -267,25 +267,25 @@ enum ActionCatalog {
                 id: "move.left",
                 command: .move(.left),
                 category: .move,
-                binding: KeyBinding(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | shiftKey))
+                binding: .unassigned
             ),
             action(
                 id: "move.down",
                 command: .move(.down),
                 category: .move,
-                binding: KeyBinding(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(optionKey | shiftKey))
+                binding: .unassigned
             ),
             action(
                 id: "move.up",
                 command: .move(.up),
                 category: .move,
-                binding: KeyBinding(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | shiftKey))
+                binding: .unassigned
             ),
             action(
                 id: "move.right",
                 command: .move(.right),
                 category: .move,
-                binding: KeyBinding(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(optionKey | shiftKey))
+                binding: .unassigned
             )
         ])
 
@@ -330,7 +330,7 @@ enum ActionCatalog {
                 id: "focusMonitorNext",
                 command: .focusMonitorNext,
                 category: .monitor,
-                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(controlKey | cmdKey))
+                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(optionKey))
             ),
             action(
                 id: "focusMonitorPrevious",
@@ -357,7 +357,7 @@ enum ActionCatalog {
                 id: "toggleFullscreen",
                 command: .toggleFullscreen,
                 category: .layout,
-                binding: KeyBinding(keyCode: UInt32(kVK_Return), modifiers: UInt32(optionKey))
+                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey | shiftKey))
             ),
             action(
                 id: "toggleNativeFullscreen",
@@ -371,7 +371,7 @@ enum ActionCatalog {
                 category: .column,
                 binding: KeyBinding(
                     keyCode: UInt32(kVK_LeftArrow),
-                    modifiers: UInt32(optionKey | controlKey | shiftKey)
+                    modifiers: UInt32(optionKey | shiftKey)
                 )
             ),
             action(
@@ -380,7 +380,7 @@ enum ActionCatalog {
                 category: .column,
                 binding: KeyBinding(
                     keyCode: UInt32(kVK_RightArrow),
-                    modifiers: UInt32(optionKey | controlKey | shiftKey)
+                    modifiers: UInt32(optionKey | shiftKey)
                 )
             ),
             action(
@@ -489,7 +489,7 @@ enum ActionCatalog {
                 id: "toggleColumnFullWidth",
                 command: .toggleColumnFullWidth,
                 category: .column,
-                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey | shiftKey))
+                binding: .unassigned
             ),
             action(
                 id: "expandColumnToAvailableWidth",
@@ -549,7 +549,7 @@ enum ActionCatalog {
                 id: "balanceSizes",
                 command: .balanceSizes,
                 category: .layout,
-                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(optionKey | shiftKey))
+                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_Slash), modifiers: UInt32(optionKey))
             ),
             action(id: "moveToRoot", command: .moveToRoot, category: .layout, binding: .unassigned),
             action(id: "toggleSplit", command: .toggleSplit, category: .layout, binding: .unassigned),
@@ -646,7 +646,7 @@ enum ActionCatalog {
                 id: "toggleFocusedWindowFloating",
                 command: .toggleFocusedWindowFloating,
                 category: .layout,
-                binding: .unassigned,
+                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey)),
                 keywords: ["float", "floating"]
             ),
             action(

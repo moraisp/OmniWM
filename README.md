@@ -264,8 +264,8 @@ Layout legend:
 | Switch to Previous Workspace (Back and Forth) | `Control + Option + Tab` | `Shared` |
 | Switch to Next Workspace | `Unassigned` | `Shared` |
 | Switch to Previous Workspace (Sequential) | `Unassigned` | `Shared` |
-| Move Window to Workspace Up | `Control + Option + Shift + Up Arrow` | `Shared` |
-| Move Window to Workspace Down | `Control + Option + Shift + Down Arrow` | `Shared` |
+| Move Window to Workspace Up | `Option + Shift + Up Arrow` | `Shared` |
+| Move Window to Workspace Down | `Option + Shift + Down Arrow` | `Shared` |
 | Move Column to Workspace 1-9 | `Unassigned` | `Niri` |
 | Move Column to Workspace Up | `Control + Option + Shift + Page Up` | `Niri` |
 | Move Column to Workspace Down | `Control + Option + Shift + Page Down` | `Niri` |
@@ -275,7 +275,7 @@ Layout legend:
 | Action | Default Shortcut | Layout |
 |--------|------------------|--------|
 | Focus Left / Right / Up / Down | `Option + Arrow Keys` | `Shared` |
-| Focus Previous Window | `Option + Tab` | `Niri` |
+| Focus Previous Window | `Unassigned` | `Niri` |
 | Traverse Backward | `Unassigned` | `Niri` |
 | Traverse Forward | `Unassigned` | `Niri` |
 | Focus First Column | `Option + Home` | `Niri` |
@@ -292,13 +292,13 @@ Layout legend:
 
 | Action | Default Shortcut | Layout |
 |--------|------------------|--------|
-| Move Left / Right / Up / Down | `Option + Shift + Arrow Keys` | `Shared` |
+| Move Left / Right / Up / Down | `Unassigned` | `Shared` |
 
 #### Monitor
 
 | Action | Default Shortcut | Layout |
 |--------|------------------|--------|
-| Focus Next Monitor | `Control + Command + Tab` | `Shared` |
+| Focus Next Monitor | `Option + Tab` | `Shared` |
 | Focus Previous Monitor | `Unassigned` | `Shared` |
 | Focus Last Monitor | `` Control + Command + ` `` | `Shared` |
 
@@ -306,9 +306,9 @@ Layout legend:
 
 | Action | Default Shortcut | Layout |
 |--------|------------------|--------|
-| Toggle Fullscreen | `Option + Return` | `Shared` |
+| Toggle Fullscreen | `Option + Shift + F` | `Shared` |
 | Toggle Native Fullscreen | `Unassigned` | `Shared` |
-| Balance Sizes | `Option + Shift + B` | `Shared` |
+| Balance Sizes | `Option + /` | `Shared` |
 | Move to Root | `Unassigned` | `Dwindle` |
 | Toggle Split | `Unassigned` | `Dwindle` |
 | Swap Split | `Unassigned` | `Dwindle` |
@@ -317,7 +317,7 @@ Layout legend:
 | Preselect Left / Right / Up / Down | `Unassigned` | `Dwindle` |
 | Clear Preselection | `Unassigned` | `Dwindle` |
 | Raise All Floating Windows | `Option + Shift + R` | `Shared` |
-| Toggle Focused Window Floating | `Unassigned` | `Shared` |
+| Toggle Focused Window Floating | `Option + F` | `Shared` |
 | Assign Focused Window to Scratchpad | `Unassigned` | `Shared` |
 | Toggle Scratchpad Window | `Unassigned` | `Shared` |
 | Toggle Workspace Layout | `Option + Shift + L` | `Shared` |
@@ -326,11 +326,11 @@ Layout legend:
 
 | Action | Default Shortcut | Layout |
 |--------|------------------|--------|
-| Move Column Left / Right | `Control + Option + Shift + Left / Right Arrow` | `Niri` |
+| Move Column Left / Right | `Option + Shift + Left / Right Arrow` | `Niri` |
 | Toggle Column Tabbed | `Option + T` | `Niri` |
 | Cycle Column Width Forward | `Option + .` | `Shared` |
 | Cycle Column Width Backward | `Option + ,` | `Shared` |
-| Toggle Column Full Width | `Option + Shift + F` | `Niri` |
+| Toggle Column Full Width | `Unassigned` | `Niri` |
 
 In Niri, `Move Left / Right` expels the focused window out of multi-window columns or consumes a single-window column into the adjacent column. `Move Up / Down` keeps the current in-column reorder behavior.
 
