@@ -44,11 +44,6 @@ private enum ContainerVisibilityState {
     case hidden(AxisHideEdge)
 }
 
-private struct ContainerOverflowRegion {
-    let edge: AxisHideEdge
-    let rect: CGRect
-}
-
 extension NiriLayoutEngine {
     func calculateLayout(
         state: ViewportState,
@@ -219,9 +214,7 @@ extension NiriLayoutEngine {
                 for: visibilityRect,
                 viewportFrame: workingFrame,
                 fallback: idx == 0 ? .minimum : .maximum,
-                orientation: orientation,
-                hiddenPlacementMonitor: hiddenPlacementMonitor,
-                hiddenPlacementMonitors: hiddenPlacementMonitors
+                orientation: orientation
             ) {
             case .visible:
                 renderedContainerRect = visibilityRect
@@ -310,9 +303,7 @@ extension NiriLayoutEngine {
         for renderedRect: CGRect,
         viewportFrame: CGRect,
         fallback: AxisHideEdge,
-        orientation: Monitor.Orientation,
-        hiddenPlacementMonitor: HiddenPlacementMonitorContext?,
-        hiddenPlacementMonitors: [HiddenPlacementMonitorContext]
+        orientation: Monitor.Orientation
     ) -> ContainerVisibilityState {
         let defaultHideEdge = hiddenEdge(
             for: renderedRect,
@@ -326,15 +317,6 @@ extension NiriLayoutEngine {
             orientation: orientation
         ) else {
             return .hidden(defaultHideEdge)
-        }
-        if let overflowEdge = overflowEdgeIntersectingNeighboringMonitor(
-            renderedRect,
-            viewportFrame: viewportFrame,
-            orientation: orientation,
-            hiddenPlacementMonitor: hiddenPlacementMonitor,
-            hiddenPlacementMonitors: hiddenPlacementMonitors
-        ) {
-            return .hidden(overflowEdge)
         }
         return .visible
     }
@@ -350,128 +332,6 @@ extension NiriLayoutEngine {
         case .vertical:
             containerRect.maxY > viewportFrame.minY && containerRect.minY < viewportFrame.maxY
         }
-    }
-
-    private func overflowEdgeIntersectingNeighboringMonitor(
-        _ renderedRect: CGRect,
-        viewportFrame: CGRect,
-        orientation: Monitor.Orientation,
-        hiddenPlacementMonitor: HiddenPlacementMonitorContext?,
-        hiddenPlacementMonitors: [HiddenPlacementMonitorContext]
-    ) -> AxisHideEdge? {
-        let overflowRegions = containerOverflowRegions(
-            for: renderedRect,
-            viewportFrame: viewportFrame,
-            orientation: orientation
-        )
-        guard !overflowRegions.isEmpty else { return nil }
-
-        for overflowRegion in overflowRegions {
-            for otherMonitor in hiddenPlacementMonitors where !ownsViewport(
-                otherMonitor,
-                hiddenPlacementMonitor: hiddenPlacementMonitor,
-                viewportFrame: viewportFrame
-            ) {
-                if overflowRegion.rect.intersects(otherMonitor.frame) {
-                    return overflowRegion.edge
-                }
-            }
-        }
-
-        return nil
-    }
-
-    private func containerOverflowRegions(
-        for renderedRect: CGRect,
-        viewportFrame: CGRect,
-        orientation: Monitor.Orientation
-    ) -> [ContainerOverflowRegion] {
-        var overflowRegions: [ContainerOverflowRegion] = []
-        overflowRegions.reserveCapacity(2)
-
-        switch orientation {
-        case .horizontal:
-            if renderedRect.minX < viewportFrame.minX {
-                let overflowMaxX = min(renderedRect.maxX, viewportFrame.minX)
-                if overflowMaxX > renderedRect.minX {
-                    overflowRegions.append(
-                        ContainerOverflowRegion(
-                            edge: .minimum,
-                            rect: CGRect(
-                                x: renderedRect.minX,
-                                y: renderedRect.minY,
-                                width: overflowMaxX - renderedRect.minX,
-                                height: renderedRect.height
-                            )
-                        )
-                    )
-                }
-            }
-            if renderedRect.maxX > viewportFrame.maxX {
-                let overflowMinX = max(renderedRect.minX, viewportFrame.maxX)
-                if renderedRect.maxX > overflowMinX {
-                    overflowRegions.append(
-                        ContainerOverflowRegion(
-                            edge: .maximum,
-                            rect: CGRect(
-                                x: overflowMinX,
-                                y: renderedRect.minY,
-                                width: renderedRect.maxX - overflowMinX,
-                                height: renderedRect.height
-                            )
-                        )
-                    )
-                }
-            }
-        case .vertical:
-            if renderedRect.minY < viewportFrame.minY {
-                let overflowMaxY = min(renderedRect.maxY, viewportFrame.minY)
-                if overflowMaxY > renderedRect.minY {
-                    overflowRegions.append(
-                        ContainerOverflowRegion(
-                            edge: .minimum,
-                            rect: CGRect(
-                                x: renderedRect.minX,
-                                y: renderedRect.minY,
-                                width: renderedRect.width,
-                                height: overflowMaxY - renderedRect.minY
-                            )
-                        )
-                    )
-                }
-            }
-            if renderedRect.maxY > viewportFrame.maxY {
-                let overflowMinY = max(renderedRect.minY, viewportFrame.maxY)
-                if renderedRect.maxY > overflowMinY {
-                    overflowRegions.append(
-                        ContainerOverflowRegion(
-                            edge: .maximum,
-                            rect: CGRect(
-                                x: renderedRect.minX,
-                                y: overflowMinY,
-                                width: renderedRect.width,
-                                height: renderedRect.maxY - overflowMinY
-                            )
-                        )
-                    )
-                }
-            }
-        }
-
-        return overflowRegions
-    }
-
-    private func ownsViewport(
-        _ candidateMonitor: HiddenPlacementMonitorContext,
-        hiddenPlacementMonitor: HiddenPlacementMonitorContext?,
-        viewportFrame: CGRect
-    ) -> Bool {
-        if let hiddenPlacementMonitor {
-            return candidateMonitor.id == hiddenPlacementMonitor.id
-        }
-
-        return candidateMonitor.frame.intersects(viewportFrame)
-            || candidateMonitor.visibleFrame.intersects(viewportFrame)
     }
 
     private func hiddenEdge(

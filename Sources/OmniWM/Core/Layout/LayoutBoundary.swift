@@ -166,6 +166,7 @@ struct WorkspaceLayoutPlan {
     var sessionPatch: WorkspaceSessionPatch
     var diff: WorkspaceLayoutDiff
     var animationDirectives: [AnimationDirective] = []
+    var sourceReason: RefreshReason?
 }
 
 typealias RefreshPostLayoutAction = @MainActor () -> Void
@@ -174,4 +175,5 @@ struct RefreshExecutionPlan {
     var workspacePlans: [WorkspaceLayoutPlan] = []
     var effects: RefreshExecutionEffects = .init()
     var postLayoutActions: [RefreshPostLayoutAction] = []
+    var sourceReason: RefreshReason?
 }

@@ -137,12 +137,15 @@ enum NiriWindowMoveResult {
             return
         }
 
-        let plan = buildOnDemandLayoutPlan(
+        var plan = buildOnDemandLayoutPlan(
             snapshot: snapshot,
             engine: engine,
             monitor: monitor,
             animationTime: animationTime
         )
+        if animationTime != nil {
+            plan.sourceReason = .layoutCommand
+        }
         controller.layoutRefreshController.executeLayoutPlan(plan)
     }
 

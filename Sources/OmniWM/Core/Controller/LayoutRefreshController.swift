@@ -176,6 +176,7 @@ import QuartzCore
     var debugCounters = RefreshDebugCounters()
     var debugHooks = RefreshDebugHooks()
     private var activeFrameContext: RefreshFrameContext?
+    fileprivate var activeFrameApplicationReason: RefreshReason?
     private var pendingRevealTransactionsByWindowId: [Int: PendingRevealTransaction] = [:]
     private var pendingRevealVerificationTasksByWindowId: [Int: Task<Void, Never>] = [:]
     private var observedLayoutConstraintTokens: Set<WindowToken> = []
@@ -467,7 +468,11 @@ import QuartzCore
 
         layoutState.didExecuteRefreshExecutionPlan = true
         activeFrameContext = RefreshFrameContext()
-        defer { activeFrameContext = nil }
+        activeFrameApplicationReason = plan.sourceReason
+        defer {
+            activeFrameContext = nil
+            activeFrameApplicationReason = nil
+        }
 
         // Rebuild the inactive-workspace window set BEFORE executing layout plans
         // so that applyFramesParallel (inside executeLayoutPlans) uses the correct
@@ -968,6 +973,11 @@ import QuartzCore
     }
 
     private func applyRefreshMetadata(_ refresh: ScheduledRefresh, to plan: inout RefreshExecutionPlan) {
+        plan.sourceReason = refresh.reason
+        for index in plan.workspacePlans.indices {
+            plan.workspacePlans[index].sourceReason = refresh.reason
+        }
+
         if !refresh.postLayoutActions.isEmpty {
             plan.postLayoutActions.append(contentsOf: refresh.postLayoutActions)
         }
@@ -2946,7 +2956,8 @@ import QuartzCore
     func handleResizePlaceholderFrameApplyResult(
         _ result: AXFrameApplyResult,
         workspaceId: WorkspaceDescriptor.ID,
-        monitor: Monitor
+        monitor: Monitor,
+        sourceReason: RefreshReason? = nil
     ) {
         guard let controller,
               let entry = controller.workspaceManager.entry(for: .init(pid: result.pid, windowId: result.windowId)),
@@ -2967,7 +2978,12 @@ import QuartzCore
             return
         }
 
-        if adaptLayoutToObservedWindowSizeIfNeeded(result, entry: entry, workspaceId: workspaceId) {
+        if adaptLayoutToObservedWindowSizeIfNeeded(
+            result,
+            entry: entry,
+            workspaceId: workspaceId,
+            sourceReason: sourceReason
+        ) {
             return
         }
 
@@ -3045,7 +3061,8 @@ import QuartzCore
     private func adaptLayoutToObservedWindowSizeIfNeeded(
         _ result: AXFrameApplyResult,
         entry: WindowModel.Entry,
-        workspaceId: WorkspaceDescriptor.ID
+        workspaceId: WorkspaceDescriptor.ID,
+        sourceReason: RefreshReason?
     ) -> Bool {
         guard let controller,
               entry.layoutReason == .standard,
@@ -3062,6 +3079,14 @@ import QuartzCore
 
         let constraints = resizePlaceholderFallbackConstraints(for: entry, observedFrame: observedFrame)
         var learnedConstraints = constraints
+
+        if shouldIgnoreObservedSmallerSizeAdaptation(
+            result,
+            observedFrame: observedFrame,
+            sourceReason: sourceReason
+        ) {
+            return false
+        }
 
         if result.targetFrame.width + 0.5 < observedFrame.width {
             learnedConstraints.minSize.width = max(
@@ -3095,6 +3120,24 @@ import QuartzCore
         controller.clearResizePlaceholder(for: entry.token)
         requestRelayout(reason: .axWindowChanged, affectedWorkspaceIds: [workspaceId])
         return true
+    }
+
+    private func shouldIgnoreObservedSmallerSizeAdaptation(
+        _ result: AXFrameApplyResult,
+        observedFrame: CGRect,
+        sourceReason: RefreshReason?
+    ) -> Bool {
+        let targetIsLargerThanObserved = result.targetFrame.width > observedFrame.width + 0.5
+            || result.targetFrame.height > observedFrame.height + 0.5
+        guard targetIsLargerThanObserved else { return false }
+
+        switch sourceReason {
+        case .interactiveGesture,
+             .layoutCommand:
+            return true
+        default:
+            return false
+        }
     }
 
     private func adaptNiriContainerToObservedWindowSize(
@@ -3491,13 +3534,15 @@ final class LayoutDiffExecutor {
         }
 
         if !resizeProbeFrameUpdates.isEmpty {
+            let sourceReason = plan.sourceReason ?? refreshController.activeFrameApplicationReason
             controller.axManager.applyFramesParallel(
                 resizeProbeFrameUpdates,
                 terminalObserver: { [weak refreshController] result in
                     refreshController?.handleResizePlaceholderFrameApplyResult(
                         result,
                         workspaceId: plan.workspaceId,
-                        monitor: monitor
+                        monitor: monitor,
+                        sourceReason: sourceReason
                     )
                 }
             )

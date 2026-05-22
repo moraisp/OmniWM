@@ -1,0 +1,2015 @@
+From 26df6ca40d6a7212c9c5daa44e62c61d83fde9a4 Mon Sep 17 00:00:00 2001
+From: pmorais <pmorais@pmoraiss-MacBook-Pro.local>
+Date: Wed, 20 May 2026 18:59:59 -0300
+Subject: [PATCH 1/3] Add app rule hotkeys and dev app packaging
+
+- Add per-app activation hotkeys and actions for open, rotate, and pull-right
+- Add workspace-to-next-monitor movement and preserve bindings on import
+- Add scripts and Makefile targets for building and installing the dev app
+---
+ Makefile                                      |   8 +-
+ Scripts/build-metadata.env                    |   2 +-
+ Scripts/install-dev-app.sh                    |  27 ++++
+ Scripts/package-dev-app.sh                    |  68 +++++++++
+ Sources/OmniWM/Core/Config/AppRule.swift      |  17 ++-
+ .../OmniWM/Core/Config/SettingsStore.swift    |   2 +-
+ .../Core/Controller/CommandHandler.swift      |   8 +
+ .../OmniWM/Core/Controller/WMController.swift |  33 ++++-
+ .../Core/Controller/WindowActionHandler.swift | 140 +++++++++++++++++-
+ .../WorkspaceNavigationHandler.swift          |  68 +++++++++
+ Sources/OmniWM/Core/Input/ActionCatalog.swift |  22 ++-
+ Sources/OmniWM/Core/Input/HotkeyBinding.swift |  10 ++
+ Sources/OmniWM/Core/Input/HotkeyCommand.swift |   5 +
+ .../OmniWM/Core/Input/KeySymbolMapper.swift   |   6 +
+ .../Niri/NiriLayoutEngine+Monitors.swift      |  40 +++++
+ .../ViewportState+ColumnTransitions.swift     |  14 ++
+ .../Core/Workspace/WorkspaceManager.swift     |   4 +-
+ Sources/OmniWM/UI/AppRuleDraft.swift          |   6 +-
+ Sources/OmniWM/UI/AppRulesView.swift          |  62 +++++++-
+ Tests/OmniWMTests/SettingsStoreTests.swift    |  17 +++
+ 20 files changed, 539 insertions(+), 20 deletions(-)
+ create mode 100755 Scripts/install-dev-app.sh
+ create mode 100755 Scripts/package-dev-app.sh
+
+diff --git a/Makefile b/Makefile
+index 14eae72..739b481 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-.PHONY: format format-check lint lint-fix no-zig-audit build test release-check verify check check-tool-versions check-swiftformat-version check-swiftlint-version
++.PHONY: format format-check lint lint-fix no-zig-audit build test dev-app dev-install release-check verify check check-tool-versions check-swiftformat-version check-swiftlint-version
+ 
+ SWIFTFORMAT_VERSION = 0.61.1
+ SWIFTLINT_VERSION = 0.63.2
+@@ -41,6 +41,12 @@ test:
+ 	./Scripts/ghostty-preflight.sh verify
+ 	$(SWIFT_WITH_GHOSTTY) swift test
+ 
++dev-app:
++	./Scripts/package-dev-app.sh debug
++
++dev-install:
++	./Scripts/install-dev-app.sh
++
+ release-check: no-zig-audit build test
+ 
+ verify: format-check lint no-zig-audit build test
+diff --git a/Scripts/build-metadata.env b/Scripts/build-metadata.env
+index cc3689d..258b742 100644
+--- a/Scripts/build-metadata.env
++++ b/Scripts/build-metadata.env
+@@ -1,3 +1,3 @@
+ # Swift-only backport metadata. Parsed as fixed KEY=VALUE data; do not source.
+ OMNIWM_GHOSTTY_ARCHIVE_RELATIVE_PATH=Frameworks/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a
+-OMNIWM_GHOSTTY_ARCHIVE_SHA256=fc3f8846ff2fa307dbdeed618331455832bd42b43b1d9f98039a1c90b7a89e5b
++OMNIWM_GHOSTTY_ARCHIVE_SHA256=80676ef09472a36801779453e5e91a411d6381a9729db8f2f6fc60ca9bc4f9e2
+diff --git a/Scripts/install-dev-app.sh b/Scripts/install-dev-app.sh
+new file mode 100755
+index 0000000..46a386d
+--- /dev/null
++++ b/Scripts/install-dev-app.sh
+@@ -0,0 +1,27 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++APP_DIR="/Applications/OmniWM.app"
++CLI_LINK="/opt/homebrew/bin/omniwmctl"
++
++"$ROOT_DIR/Scripts/package-dev-app.sh" debug
++
++osascript -e 'tell application "OmniWM" to quit' >/dev/null 2>&1 || true
++for _ in {1..20}; do
++  if ! pgrep -x OmniWM >/dev/null; then
++    break
++  fi
++  sleep 0.25
++done
++
++if [ -d "$APP_DIR" ]; then
++  rm -rf "$APP_DIR/Contents"
++  ditto "$ROOT_DIR/dist/OmniWM.app/Contents" "$APP_DIR/Contents"
++else
++  ditto "$ROOT_DIR/dist/OmniWM.app" "$APP_DIR"
++fi
++ln -sf "$APP_DIR/Contents/MacOS/omniwmctl" "$CLI_LINK"
++
++open "$APP_DIR"
++echo "Installed and opened $APP_DIR"
+diff --git a/Scripts/package-dev-app.sh b/Scripts/package-dev-app.sh
+new file mode 100755
+index 0000000..06db24f
+--- /dev/null
++++ b/Scripts/package-dev-app.sh
+@@ -0,0 +1,68 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++CONFIG="${1:-debug}"
++CONFIG_DIR="$(tr '[:lower:]' '[:upper:]' <<< "${CONFIG:0:1}")${CONFIG:1}"
++APP_DIR="$ROOT_DIR/dist/OmniWM.app"
++TMP_DIR="$ROOT_DIR/.tmp/OmniWM-dev-app"
++ENTITLEMENTS="$ROOT_DIR/OmniWM.entitlements"
++GHOSTTY_LIBRARY_DIR="$("$ROOT_DIR/Scripts/ghostty-preflight.sh" print-library-dir)"
++DEFAULT_SIGNING_IDENTITY="OmniWM Local Development"
++
++if [[ -n "${OMNIWM_DEV_SIGN_IDENTITY:-}" ]]; then
++  SIGNING_IDENTITY="$OMNIWM_DEV_SIGN_IDENTITY"
++elif security find-identity -v -p codesigning | grep -Fq "$DEFAULT_SIGNING_IDENTITY"; then
++  SIGNING_IDENTITY="$DEFAULT_SIGNING_IDENTITY"
++else
++  SIGNING_IDENTITY="-"
++fi
++
++build_arch() {
++  local arch="$1"
++  local triple="$2"
++
++  echo "Building $CONFIG for $arch..."
++  LIBRARY_PATH="$GHOSTTY_LIBRARY_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" \
++    swift build -c "$CONFIG" --triple "$triple"
++}
++
++build_arch arm64 arm64-apple-macosx15.0
++build_arch x86_64 x86_64-apple-macosx15.0
++
++ARM_DIR="$ROOT_DIR/.build/arm64-apple-macosx/$CONFIG"
++X64_DIR="$ROOT_DIR/.build/x86_64-apple-macosx/$CONFIG"
++
++echo "Packaging universal app at $APP_DIR..."
++rm -rf "$TMP_DIR"
++mkdir -p "$TMP_DIR/Contents/MacOS" "$TMP_DIR/Contents/Resources"
++
++lipo -create "$ARM_DIR/OmniWM" "$X64_DIR/OmniWM" -output "$TMP_DIR/Contents/MacOS/OmniWM"
++lipo -create "$ARM_DIR/omniwmctl" "$X64_DIR/omniwmctl" -output "$TMP_DIR/Contents/MacOS/omniwmctl"
++
++cp "$ROOT_DIR/Info.plist" "$TMP_DIR/Contents/Info.plist"
++cp "$ROOT_DIR/Resources/AppIcon.icns" "$TMP_DIR/Contents/Resources/AppIcon.icns"
++cp -R "$ARM_DIR/OmniWM_OmniWM.bundle" "$TMP_DIR/Contents/Resources/"
++
++if command -v plutil >/dev/null 2>&1; then
++  plutil -lint "$TMP_DIR/Contents/Info.plist" >/dev/null
++fi
++
++lipo -info "$TMP_DIR/Contents/MacOS/OmniWM"
++lipo -info "$TMP_DIR/Contents/MacOS/omniwmctl"
++
++echo "Signing with identity: $SIGNING_IDENTITY"
++if [[ "$SIGNING_IDENTITY" == "-" ]]; then
++  codesign --force --sign "$SIGNING_IDENTITY" "$TMP_DIR/Contents/MacOS/omniwmctl" >/dev/null
++  codesign --force --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$TMP_DIR/Contents/MacOS/OmniWM" >/dev/null
++  codesign --force --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$TMP_DIR" >/dev/null
++else
++  codesign --force --deep --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$TMP_DIR" >/dev/null
++fi
++
++rm -rf "$APP_DIR"
++mkdir -p "$(dirname "$APP_DIR")"
++mv "$TMP_DIR" "$APP_DIR"
++
++codesign --verify --verbose "$APP_DIR"
++echo "Done. Open $APP_DIR to run this build."
+diff --git a/Sources/OmniWM/Core/Config/AppRule.swift b/Sources/OmniWM/Core/Config/AppRule.swift
+index 56f201b..a126a20 100644
+--- a/Sources/OmniWM/Core/Config/AppRule.swift
++++ b/Sources/OmniWM/Core/Config/AppRule.swift
+@@ -53,6 +53,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         case assignToWorkspace
+         case minWidth
+         case minHeight
++        case activationKey
+     }
+ 
+     let id: UUID
+@@ -68,6 +69,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+     var assignToWorkspace: String?
+     var minWidth: Double?
+     var minHeight: Double?
++    var activationKey: String?
+ 
+     init(
+         id: UUID = UUID(),
+@@ -82,7 +84,8 @@ struct AppRule: Codable, Identifiable, Equatable {
+         layout: WindowRuleLayoutAction? = nil,
+         assignToWorkspace: String? = nil,
+         minWidth: Double? = nil,
+-        minHeight: Double? = nil
++        minHeight: Double? = nil,
++        activationKey: String? = nil
+     ) {
+         self.id = id
+         self.bundleId = bundleId
+@@ -97,6 +100,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         self.assignToWorkspace = assignToWorkspace
+         self.minWidth = minWidth
+         self.minHeight = minHeight
++        self.activationKey = Self.normalizedActivationKey(activationKey)
+         normalizeLegacyManageOff()
+     }
+ 
+@@ -155,6 +159,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         assignToWorkspace = try container.decodeIfPresent(String.self, forKey: .assignToWorkspace)
+         minWidth = try container.decodeIfPresent(Double.self, forKey: .minWidth)
+         minHeight = try container.decodeIfPresent(Double.self, forKey: .minHeight)
++        activationKey = Self.normalizedActivationKey(try container.decodeIfPresent(String.self, forKey: .activationKey))
+         normalizeLegacyManageOff()
+     }
+ 
+@@ -173,6 +178,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         try container.encodeIfPresent(assignToWorkspace, forKey: .assignToWorkspace)
+         try container.encodeIfPresent(minWidth, forKey: .minWidth)
+         try container.encodeIfPresent(minHeight, forKey: .minHeight)
++        try container.encodeIfPresent(activationKey, forKey: .activationKey)
+     }
+ 
+     private mutating func normalizeLegacyManageOff() {
+@@ -180,4 +186,13 @@ struct AppRule: Codable, Identifiable, Equatable {
+         manage = nil
+         layout = .float
+     }
++
++    static func normalizedActivationKey(_ value: String?) -> String? {
++        guard let value else { return nil }
++        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard trimmed.count == 1, let scalar = trimmed.unicodeScalars.first else { return nil }
++        let uppercased = String(scalar).uppercased()
++        guard uppercased.range(of: #"^[A-Z]$"#, options: .regularExpression) != nil else { return nil }
++        return uppercased
++    }
+ }
+diff --git a/Sources/OmniWM/Core/Config/SettingsStore.swift b/Sources/OmniWM/Core/Config/SettingsStore.swift
+index bceb4c0..c4a02b2 100644
+--- a/Sources/OmniWM/Core/Config/SettingsStore.swift
++++ b/Sources/OmniWM/Core/Config/SettingsStore.swift
+@@ -622,7 +622,7 @@ final class SettingsStore {
+         borderColorBlue = export.borderColorBlue
+         borderColorAlpha = export.borderColorAlpha
+ 
+-        hotkeyBindings = export.hotkeyBindings
++        hotkeyBindings = HotkeyBindingRegistry.mergeMissingDefaults(into: export.hotkeyBindings)
+ 
+         workspaceBarEnabled = export.workspaceBarEnabled
+         workspaceBarShowLabels = export.workspaceBarShowLabels
+diff --git a/Sources/OmniWM/Core/Controller/CommandHandler.swift b/Sources/OmniWM/Core/Controller/CommandHandler.swift
+index 28f7d9a..40cc2e6 100644
+--- a/Sources/OmniWM/Core/Controller/CommandHandler.swift
++++ b/Sources/OmniWM/Core/Controller/CommandHandler.swift
+@@ -83,6 +83,8 @@ final class CommandHandler {
+             controller.workspaceNavigationHandler.focusMonitorCyclic(previous: false)
+         case .focusMonitorLast:
+             controller.workspaceNavigationHandler.focusLastMonitor()
++        case .moveWorkspaceToNextMonitor:
++            controller.workspaceNavigationHandler.moveCurrentWorkspaceToNextMonitor()
+         case .toggleFullscreen:
+             toggleFullscreen()
+         case .toggleNativeFullscreen:
+@@ -198,6 +200,12 @@ final class CommandHandler {
+             toggleWorkspaceLayout()
+         case .toggleOverview:
+             controller.toggleOverview()
++        case let .appRuleOpenOrRotate(ruleId):
++            return controller.windowActionHandler.openOrRotateApp(ruleId: ruleId)
++        case let .appRuleOpenNewInstance(ruleId):
++            return controller.windowActionHandler.openNewAppInstance(ruleId: ruleId)
++        case let .appRulePullRight(ruleId):
++            return controller.windowActionHandler.pullAppWindowRight(ruleId: ruleId)
+         }
+ 
+         return .executed
+diff --git a/Sources/OmniWM/Core/Controller/WMController.swift b/Sources/OmniWM/Core/Controller/WMController.swift
+index 91a8b5b..08b9cdf 100644
+--- a/Sources/OmniWM/Core/Controller/WMController.swift
++++ b/Sources/OmniWM/Core/Controller/WMController.swift
+@@ -1,4 +1,5 @@
+ import AppKit
++import Carbon
+ import Foundation
+ import OmniWMIPC
+ 
+@@ -635,7 +636,7 @@ final class WMController {
+     }
+ 
+     func updateHotkeyBindings(_ bindings: [HotkeyBinding]) {
+-        hotkeys.updateBindings(bindings)
++        hotkeys.updateBindings(bindings + appRuleHotkeyBindings())
+     }
+ 
+     func updateWorkspaceConfig() {
+@@ -650,6 +651,7 @@ final class WMController {
+ 
+     func updateAppRules() {
+         rebuildAppRulesCache()
++        updateHotkeyBindings(settings.hotkeyBindings)
+         layoutRefreshController.requestFullRescan(reason: .appRulesChanged)
+     }
+ 
+@@ -657,6 +659,35 @@ final class WMController {
+         hotkeys.registrationFailures
+     }
+ 
++    private func appRuleHotkeyBindings() -> [HotkeyBinding] {
++        settings.appRules.flatMap { rule -> [HotkeyBinding] in
++            guard let activationKey = rule.activationKey,
++                  let keyCode = KeySymbolMapper.keyCode(forLetter: activationKey)
++            else {
++                return []
++            }
++
++            let baseId = "appRule.\(rule.id.uuidString).\(activationKey.lowercased())"
++            return [
++                HotkeyBinding(
++                    id: "\(baseId).openOrRotate",
++                    command: .appRuleOpenOrRotate(rule.id),
++                    binding: KeyBinding(keyCode: keyCode, modifiers: UInt32(optionKey))
++                ),
++                HotkeyBinding(
++                    id: "\(baseId).openNewInstance",
++                    command: .appRuleOpenNewInstance(rule.id),
++                    binding: KeyBinding(keyCode: keyCode, modifiers: UInt32(optionKey | controlKey))
++                ),
++                HotkeyBinding(
++                    id: "\(baseId).pullRight",
++                    command: .appRulePullRight(rule.id),
++                    binding: KeyBinding(keyCode: keyCode, modifiers: UInt32(optionKey | shiftKey))
++                )
++            ]
++        }
++    }
++
+     private var workspaceBarRefreshIsEnabled: Bool {
+         settings.workspaceBarEnabled || settings.monitorBarSettings.contains(where: { $0.enabled == true })
+     }
+diff --git a/Sources/OmniWM/Core/Controller/WindowActionHandler.swift b/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
+index b5b9657..203e737 100644
+--- a/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
++++ b/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
+@@ -3,6 +3,11 @@ import Foundation
+ 
+ @MainActor
+ final class WindowActionHandler {
++    enum NavigationPlacement {
++        case centered
++        case leading
++    }
++
+     private enum RaisableSurfaceBatchKey: Hashable {
+         case application(pid_t)
+         case ownedApplication
+@@ -333,7 +338,7 @@ final class WindowActionHandler {
+     func navigateToWindow(handle: WindowHandle) -> Bool {
+         guard let controller else { return false }
+         guard let entry = controller.workspaceManager.entry(for: handle) else { return false }
+-        return navigateToWindowInternal(token: handle.id, workspaceId: entry.workspaceId)
++        return navigateToWindowInternal(token: handle.id, workspaceId: entry.workspaceId, placement: .centered)
+     }
+ 
+     @discardableResult
+@@ -392,7 +397,11 @@ final class WindowActionHandler {
+     }
+ 
+     @discardableResult
+-    func navigateToWindowInternal(token: WindowToken, workspaceId: WorkspaceDescriptor.ID) -> Bool {
++    func navigateToWindowInternal(
++        token: WindowToken,
++        workspaceId: WorkspaceDescriptor.ID,
++        placement: NavigationPlacement = .centered
++    ) -> Bool {
+         guard let controller else { return false }
+         guard let engine = controller.niriEngine else { return false }
+ 
+@@ -418,12 +427,17 @@ final class WindowActionHandler {
+ 
+                 let cols = engine.columns(in: workspaceId)
+                 let gap = CGFloat(controller.workspaceManager.gaps)
+-                targetState.snapToColumn(
+-                    colIdx,
+-                    columns: cols,
+-                    gap: gap,
+-                    viewportWidth: monitor.visibleFrame.width
+-                )
++                switch placement {
++                case .centered:
++                    targetState.snapToColumn(
++                        colIdx,
++                        columns: cols,
++                        gap: gap,
++                        viewportWidth: monitor.visibleFrame.width
++                    )
++                case .leading:
++                    targetState.snapToColumnLeading(colIdx, columns: cols, gap: gap)
++                }
+             }
+         }
+ 
+@@ -620,4 +634,114 @@ final class WindowActionHandler {
+ 
+         return appInfoMap.values.sorted { $0.appName < $1.appName }
+     }
++
++    @discardableResult
++    func openOrRotateApp(ruleId: UUID) -> ExternalCommandResult {
++        guard let rule = appRule(id: ruleId) else { return .notFound }
++        let bundleId = rule.bundleId
++        let entries = appEntries(bundleId: bundleId)
++        guard !entries.isEmpty else {
++            return launchApp(bundleId: bundleId, newInstance: false)
++        }
++
++        let target = rotatedEntry(in: entries, bundleId: bundleId)
++        return navigateToWindowInternal(
++            token: target.token,
++            workspaceId: target.workspaceId,
++            placement: .leading
++        ) ? .executed : .notFound
++    }
++
++    @discardableResult
++    func openNewAppInstance(ruleId: UUID) -> ExternalCommandResult {
++        guard let rule = appRule(id: ruleId) else { return .notFound }
++        return launchApp(bundleId: rule.bundleId, newInstance: true)
++    }
++
++    @discardableResult
++    func pullAppWindowRight(ruleId: UUID) -> ExternalCommandResult {
++        guard let rule = appRule(id: ruleId) else { return .notFound }
++        let bundleId = rule.bundleId
++        let entries = appEntries(bundleId: bundleId)
++        guard !entries.isEmpty else {
++            return launchApp(bundleId: bundleId, newInstance: false)
++        }
++
++        let target = rotatedEntry(in: entries, bundleId: bundleId)
++        let handle = WindowHandle(id: target.token)
++        if summonWindowRight(handle: handle) {
++            return .executed
++        }
++        return navigateToWindowInternal(token: target.token, workspaceId: target.workspaceId) ? .executed : .notFound
++    }
++
++    private func appRule(id: UUID) -> AppRule? {
++        controller?.settings.appRules.first { $0.id == id }
++    }
++
++    private func appEntries(bundleId: String) -> [WindowModel.Entry] {
++        guard let controller else { return [] }
++        let normalizedBundleId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
++        guard !normalizedBundleId.isEmpty else { return [] }
++
++        return controller.workspaceManager.allEntries()
++            .filter { entry in
++                let entryBundleId = controller.appInfoCache.bundleId(for: entry.pid)
++                    ?? entry.managedReplacementMetadata?.bundleId
++                return entryBundleId?.lowercased() == normalizedBundleId
++            }
++            .sorted { lhs, rhs in
++                if lhs.workspaceId != rhs.workspaceId {
++                    return lhs.workspaceId.uuidString < rhs.workspaceId.uuidString
++                }
++                if lhs.pid != rhs.pid {
++                    return lhs.pid < rhs.pid
++                }
++                return lhs.windowId < rhs.windowId
++            }
++    }
++
++    private func rotatedEntry(in entries: [WindowModel.Entry], bundleId: String) -> WindowModel.Entry {
++        guard let controller,
++              let focusedToken = controller.workspaceManager.focusedToken,
++              let focusedEntry = controller.workspaceManager.entry(for: focusedToken)
++        else {
++            return entries[0]
++        }
++
++        let focusedBundleId = controller.appInfoCache.bundleId(for: focusedEntry.pid)
++            ?? focusedEntry.managedReplacementMetadata?.bundleId
++        guard focusedBundleId?.caseInsensitiveCompare(bundleId) == .orderedSame,
++              let currentIndex = entries.firstIndex(where: { $0.token == focusedToken })
++        else {
++            return entries[0]
++        }
++
++        return entries[(currentIndex + 1) % entries.count]
++    }
++
++    private func launchApp(bundleId: String, newInstance: Bool) -> ExternalCommandResult {
++        let normalizedBundleId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard !normalizedBundleId.isEmpty else { return .notFound }
++
++        if !newInstance,
++           let app = NSWorkspace.shared.runningApplications.first(where: {
++               $0.bundleIdentifier?.caseInsensitiveCompare(normalizedBundleId) == .orderedSame
++           })
++        {
++            app.activate(options: [])
++            return .executed
++        }
++
++        let process = Process()
++        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
++        process.arguments = newInstance ? ["-n", "-b", normalizedBundleId] : ["-b", normalizedBundleId]
++
++        do {
++            try process.run()
++            return .executed
++        } catch {
++            return .notFound
++        }
++    }
+ }
+diff --git a/Sources/OmniWM/Core/Controller/WorkspaceNavigationHandler.swift b/Sources/OmniWM/Core/Controller/WorkspaceNavigationHandler.swift
+index 0f533e3..3210cc7 100644
+--- a/Sources/OmniWM/Core/Controller/WorkspaceNavigationHandler.swift
++++ b/Sources/OmniWM/Core/Controller/WorkspaceNavigationHandler.swift
+@@ -173,6 +173,74 @@ final class WorkspaceNavigationHandler {
+         switchToMonitor(previousId, fromMonitor: currentMonitorId)
+     }
+ 
++    func moveCurrentWorkspaceToNextMonitor() {
++        guard let controller else { return }
++        guard let currentMonitorId = interactionMonitorId(for: controller) else { return }
++        guard let currentWorkspace = controller.activeWorkspace() else { return }
++        guard let sourceMonitor = controller.workspaceManager.monitor(byId: currentMonitorId) else { return }
++        guard let targetMonitor = controller.workspaceManager.nextMonitor(from: currentMonitorId) else { return }
++
++        saveNiriViewportState(for: currentWorkspace.id)
++        controller.layoutRefreshController.stopScrollAnimation(for: sourceMonitor.displayId)
++        controller.layoutRefreshController.stopScrollAnimation(for: targetMonitor.displayId)
++        controller.layoutRefreshController.cancelActiveAnimations(for: currentWorkspace.id)
++
++        scaleNiriWorkspaceState(
++            currentWorkspace.id,
++            from: sourceMonitor,
++            to: targetMonitor
++        )
++        assignWorkspaceConfiguration(named: currentWorkspace.name, to: targetMonitor)
++        controller.workspaceManager.applySettings()
++
++        _ = controller.workspaceManager.moveWorkspaceToMonitor(currentWorkspace.id, to: targetMonitor.id)
++
++        guard let refocusedWorkspace = controller.workspaceManager.focusWorkspace(named: currentWorkspace.name) else {
++            controller.syncMonitorsToNiriEngine()
++            return
++        }
++
++        controller.niriEngine?.moveWorkspace(
++            refocusedWorkspace.workspace.id,
++            to: refocusedWorkspace.monitor.id,
++            monitor: refocusedWorkspace.monitor
++        )
++        controller.syncMonitorsToNiriEngine()
++
++        commitWorkspaceTransitionFocusHandoff(
++            targetWorkspaceId: refocusedWorkspace.workspace.id,
++            monitor: refocusedWorkspace.monitor,
++            startScrollAnimation: false
++        )
++    }
++
++    private func scaleNiriWorkspaceState(
++        _ workspaceId: WorkspaceDescriptor.ID,
++        from sourceMonitor: Monitor,
++        to targetMonitor: Monitor
++    ) {
++        guard let controller else { return }
++        let sourceWidth = controller.insetWorkingFrame(from: sourceMonitor.visibleFrame).width
++        let targetWidth = controller.insetWorkingFrame(from: targetMonitor.visibleFrame).width
++        guard sourceWidth.isFinite, sourceWidth > 0, targetWidth.isFinite, targetWidth > 0 else { return }
++
++        let ratio = targetWidth / sourceWidth
++        controller.niriEngine?.scaleWorkspaceWidthState(workspaceId, by: ratio)
++        controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
++            state.viewOffsetPixels = .static(state.viewOffsetPixels.target() * ratio)
++            state.viewOffsetToRestore = state.viewOffsetToRestore.map { $0 * ratio }
++        }
++    }
++
++    private func assignWorkspaceConfiguration(named workspaceName: String, to monitor: Monitor) {
++        guard let controller else { return }
++        var configs = controller.settings.workspaceConfigurations
++        guard let index = configs.firstIndex(where: { $0.name == workspaceName }) else { return }
++
++        configs[index].monitorAssignment = .specificDisplay(OutputId(from: monitor))
++        controller.settings.workspaceConfigurations = configs
++    }
++
+     private func switchToMonitor(_ targetMonitorId: Monitor.ID, fromMonitor currentMonitorId: Monitor.ID) {
+         guard let controller else { return }
+ 
+diff --git a/Sources/OmniWM/Core/Input/ActionCatalog.swift b/Sources/OmniWM/Core/Input/ActionCatalog.swift
+index 96a3abb..fd3a516 100644
+--- a/Sources/OmniWM/Core/Input/ActionCatalog.swift
++++ b/Sources/OmniWM/Core/Input/ActionCatalog.swift
+@@ -343,6 +343,12 @@ enum ActionCatalog {
+                 command: .focusMonitorLast,
+                 category: .monitor,
+                 binding: KeyBinding(keyCode: UInt32(kVK_ANSI_Grave), modifiers: UInt32(controlKey | cmdKey))
++            ),
++            action(
++                id: "moveWorkspaceToNextMonitor",
++                command: .moveWorkspaceToNextMonitor,
++                category: .monitor,
++                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(optionKey | shiftKey))
+             )
+         ])
+ 
+@@ -794,6 +800,7 @@ enum ActionCatalog {
+              .focusMonitorPrevious,
+              .focusMonitorNext,
+              .focusMonitorLast,
++             .moveWorkspaceToNextMonitor,
+              .toggleNativeFullscreen,
+              .swapWorkspaceWithMonitor,
+              .workspaceBackAndForth,
+@@ -810,7 +817,10 @@ enum ActionCatalog {
+              .toggleHiddenBar,
+              .toggleQuakeTerminal,
+              .toggleWorkspaceLayout,
+-             .toggleOverview:
++             .toggleOverview,
++             .appRuleOpenOrRotate,
++             .appRuleOpenNewInstance,
++             .appRulePullRight:
+             .shared
+         }
+     }
+@@ -832,6 +842,7 @@ enum ActionCatalog {
+         case .focusMonitorPrevious: "Focus Previous Monitor"
+         case .focusMonitorNext: "Focus Next Monitor"
+         case .focusMonitorLast: "Focus Last Monitor"
++        case .moveWorkspaceToNextMonitor: "Move Workspace to Next Monitor"
+         case .toggleFullscreen: "Toggle Fullscreen"
+         case .toggleNativeFullscreen: "Toggle Native Fullscreen"
+         case let .moveColumn(dir): "Move Column \(dir.displayName)"
+@@ -896,6 +907,9 @@ enum ActionCatalog {
+         case .toggleQuakeTerminal: "Toggle Quake Terminal"
+         case .toggleWorkspaceLayout: "Toggle Workspace Layout"
+         case .toggleOverview: "Toggle Overview"
++        case .appRuleOpenOrRotate: "Open or Rotate App"
++        case .appRuleOpenNewInstance: "Open New App Instance"
++        case .appRulePullRight: "Pull App Window Right"
+         }
+     }
+ 
+@@ -975,6 +989,8 @@ enum ActionCatalog {
+             .focusMonitorNext
+         case .focusMonitorLast:
+             .focusMonitorLast
++        case .moveWorkspaceToNextMonitor:
++            nil
+         case .moveColumn:
+             .moveColumn
+         case .moveColumnToFirst:
+@@ -1059,6 +1075,10 @@ enum ActionCatalog {
+             .scratchpadToggle
+         case .openMenuAnywhere:
+             .openMenuAnywhere
++        case .appRuleOpenOrRotate,
++             .appRuleOpenNewInstance,
++             .appRulePullRight:
++            nil
+         }
+     }
+ 
+diff --git a/Sources/OmniWM/Core/Input/HotkeyBinding.swift b/Sources/OmniWM/Core/Input/HotkeyBinding.swift
+index 51440c3..3761536 100644
+--- a/Sources/OmniWM/Core/Input/HotkeyBinding.swift
++++ b/Sources/OmniWM/Core/Input/HotkeyBinding.swift
+@@ -162,6 +162,16 @@ enum HotkeyBindingRegistry {
+         return HotkeyBinding(id: id, command: defaultBinding.command, binding: binding)
+     }
+ 
++    static func mergeMissingDefaults(into bindings: [HotkeyBinding]) -> [HotkeyBinding] {
++        let bindingsById = Dictionary(
++            bindings.map { ($0.id, $0) },
++            uniquingKeysWith: { first, _ in first }
++        )
++        return defaultBindings.map { defaultBinding in
++            bindingsById[defaultBinding.id] ?? defaultBinding
++        }
++    }
++
+     static func canonicalize(_ persisted: [PersistedHotkeyBinding]) -> [HotkeyBinding] {
+         var overrides: [String: KeyBinding] = [:]
+         var explicitOverrideIDs: Set<String> = []
+diff --git a/Sources/OmniWM/Core/Input/HotkeyCommand.swift b/Sources/OmniWM/Core/Input/HotkeyCommand.swift
+index 52ad085..65b7cd2 100644
+--- a/Sources/OmniWM/Core/Input/HotkeyCommand.swift
++++ b/Sources/OmniWM/Core/Input/HotkeyCommand.swift
+@@ -22,6 +22,7 @@ enum HotkeyCommand: Codable, Equatable, Hashable {
+     case focusMonitorPrevious
+     case focusMonitorNext
+     case focusMonitorLast
++    case moveWorkspaceToNextMonitor
+     case toggleFullscreen
+     case toggleNativeFullscreen
+     case moveColumn(Direction)
+@@ -95,6 +96,10 @@ enum HotkeyCommand: Codable, Equatable, Hashable {
+     case toggleWorkspaceLayout
+     case toggleOverview
+ 
++    case appRuleOpenOrRotate(UUID)
++    case appRuleOpenNewInstance(UUID)
++    case appRulePullRight(UUID)
++
+     var displayName: String {
+         ActionCatalog.title(for: self) ?? String(describing: self)
+     }
+diff --git a/Sources/OmniWM/Core/Input/KeySymbolMapper.swift b/Sources/OmniWM/Core/Input/KeySymbolMapper.swift
+index b69a8b9..647dfb0 100644
+--- a/Sources/OmniWM/Core/Input/KeySymbolMapper.swift
++++ b/Sources/OmniWM/Core/Input/KeySymbolMapper.swift
+@@ -135,6 +135,12 @@ enum KeySymbolMapper {
+         keyDescriptors[keyCode]?.name ?? "?"
+     }
+ 
++    static func keyCode(forLetter letter: String) -> UInt32? {
++        let normalized = letter.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
++        guard normalized.count == 1 else { return nil }
++        return nameToKeyCode[normalized]
++    }
++
+     static func humanReadableString(keyCode: UInt32, modifiers: UInt32) -> String {
+         let mods = modifierNames(modifiers)
+         let key = keyName(keyCode)
+diff --git a/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Monitors.swift b/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Monitors.swift
+index fa52203..5142f2b 100644
+--- a/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Monitors.swift
++++ b/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Monitors.swift
+@@ -134,6 +134,22 @@ extension NiriLayoutEngine {
+         attachWorkspaceRootIfNeeded(workspaceId, to: targetMonitor)
+     }
+ 
++    func scaleWorkspaceWidthState(_ workspaceId: WorkspaceDescriptor.ID, by ratio: CGFloat) {
++        guard ratio.isFinite, ratio > 0, abs(ratio - 1) > 0.001 else { return }
++
++        for column in columns(in: workspaceId) {
++            column.width = scaled(column.width, by: ratio)
++            column.savedWidth = column.savedWidth.map { scaled($0, by: ratio) }
++            column.cachedWidth = scaled(column.cachedWidth, by: ratio)
++            column.targetWidth = column.targetWidth.map { scaled($0, by: ratio) }
++
++            for window in column.windowNodes {
++                window.windowWidth = scaled(window.windowWidth, by: ratio)
++                window.resolvedWidth = window.resolvedWidth.map { scaled($0, by: ratio) }
++            }
++        }
++    }
++
+     /// Reconcile the authoritative full workspace-to-monitor assignment set
+     /// during monitor sync and prune stale duplicate roots.
+     func syncWorkspaceAssignments(
+@@ -213,4 +229,28 @@ extension NiriLayoutEngine {
+             niriMonitor.workspaceRoots.removeValue(forKey: workspaceId)
+         }
+     }
++
++    private func scaled(_ size: ProportionalSize, by ratio: CGFloat) -> ProportionalSize {
++        switch size {
++        case .proportion:
++            return size
++        case let .fixed(value):
++            return .fixed(scaled(value, by: ratio))
++        }
++    }
++
++    private func scaled(_ size: WeightedSize, by ratio: CGFloat) -> WeightedSize {
++        switch size {
++        case .auto,
++             .preset:
++            return size
++        case let .fixed(value):
++            return .fixed(scaled(value, by: ratio))
++        }
++    }
++
++    private func scaled(_ value: CGFloat, by ratio: CGFloat) -> CGFloat {
++        guard value.isFinite, value > 0 else { return value }
++        return value * ratio
++    }
+ }
+diff --git a/Sources/OmniWM/Core/Layout/Niri/ViewportState+ColumnTransitions.swift b/Sources/OmniWM/Core/Layout/Niri/ViewportState+ColumnTransitions.swift
+index d1a3a75..209358b 100644
+--- a/Sources/OmniWM/Core/Layout/Niri/ViewportState+ColumnTransitions.swift
++++ b/Sources/OmniWM/Core/Layout/Niri/ViewportState+ColumnTransitions.swift
+@@ -184,6 +184,20 @@ extension ViewportState {
+         selectionProgress = 0
+     }
+ 
++    mutating func snapToColumnLeading(
++        _ columnIndex: Int,
++        columns: [NiriContainer],
++        gap: CGFloat
++    ) {
++        guard !columns.isEmpty else { return }
++        let clampedIndex = columnIndex.clamped(to: 0 ... (columns.count - 1))
++        activeColumnIndex = clampedIndex
++
++        let targetOffset = columnX(at: clampedIndex, columns: columns, gap: gap)
++        viewOffsetPixels = .static(targetOffset)
++        selectionProgress = 0
++    }
++
+     mutating func scrollByPixels(
+         _ deltaPixels: CGFloat,
+         columns: [NiriContainer],
+diff --git a/Sources/OmniWM/Core/Workspace/WorkspaceManager.swift b/Sources/OmniWM/Core/Workspace/WorkspaceManager.swift
+index 2d0315e..d9d52fc 100644
+--- a/Sources/OmniWM/Core/Workspace/WorkspaceManager.swift
++++ b/Sources/OmniWM/Core/Workspace/WorkspaceManager.swift
+@@ -2555,7 +2555,9 @@ final class WorkspaceManager {
+     @discardableResult
+     func moveWorkspaceToMonitor(_ workspaceId: WorkspaceDescriptor.ID, to targetMonitorId: Monitor.ID) -> Bool {
+         guard let targetMonitor = monitor(byId: targetMonitorId) else { return false }
+-        guard let sourceMonitor = monitorForWorkspace(workspaceId) else { return false }
++        guard let sourceMonitor = monitorIdShowingWorkspace(workspaceId).flatMap({ monitor(byId: $0) })
++            ?? monitorForWorkspace(workspaceId)
++        else { return false }
+ 
+         if sourceMonitor.id == targetMonitor.id { return false }
+ 
+diff --git a/Sources/OmniWM/UI/AppRuleDraft.swift b/Sources/OmniWM/UI/AppRuleDraft.swift
+index a090e40..4a5f112 100644
+--- a/Sources/OmniWM/UI/AppRuleDraft.swift
++++ b/Sources/OmniWM/UI/AppRuleDraft.swift
+@@ -30,6 +30,7 @@ struct AppRuleDraft: Identifiable, Equatable {
+     var minWidth: Double
+     var minHeightEnabled: Bool
+     var minHeight: Double
++    var activationKey: String
+     var appNameMatcherEnabled: Bool
+     var appNameSubstring: String
+     var titleMatcherMode: TitleMatcherMode
+@@ -51,6 +52,7 @@ struct AppRuleDraft: Identifiable, Equatable {
+         minWidth = 400
+         minHeightEnabled = false
+         minHeight = 300
++        activationKey = ""
+         appNameMatcherEnabled = false
+         appNameSubstring = ""
+         titleMatcherMode = .none
+@@ -73,6 +75,7 @@ struct AppRuleDraft: Identifiable, Equatable {
+         minWidth = rule.minWidth ?? 400
+         minHeightEnabled = rule.minHeight != nil
+         minHeight = rule.minHeight ?? 300
++        activationKey = rule.activationKey ?? ""
+         appNameMatcherEnabled = rule.appNameSubstring?.isEmpty == false
+         appNameSubstring = rule.appNameSubstring ?? ""
+         if rule.titleRegex?.isEmpty == false {
+@@ -131,7 +134,8 @@ struct AppRuleDraft: Identifiable, Equatable {
+             layout: preserveLegacyAlwaysFloat ? nil : (layoutAction == .auto ? nil : layoutAction),
+             assignToWorkspace: assignToWorkspaceEnabled ? assignToWorkspace.trimmedNonEmpty : nil,
+             minWidth: minWidthEnabled ? minWidth : nil,
+-            minHeight: minHeightEnabled ? minHeight : nil
++            minHeight: minHeightEnabled ? minHeight : nil,
++            activationKey: AppRule.normalizedActivationKey(activationKey)
+         )
+     }
+ }
+diff --git a/Sources/OmniWM/UI/AppRulesView.swift b/Sources/OmniWM/UI/AppRulesView.swift
+index fb55a93..537b54c 100644
+--- a/Sources/OmniWM/UI/AppRulesView.swift
++++ b/Sources/OmniWM/UI/AppRulesView.swift
+@@ -145,6 +145,9 @@ struct AppRuleSidebarRow: View {
+                 if rule.minWidth != nil || rule.minHeight != nil {
+                     RuleBadge(text: "Size", color: .orange)
+                 }
++                if let activationKey = rule.activationKey {
++                    RuleBadge(text: "⌥\(activationKey)", color: .indigo)
++                }
+                 if rule.hasAdvancedMatchers {
+                     RuleBadge(text: "Advanced", color: .purple)
+                 }
+@@ -226,6 +229,15 @@ struct AppRuleDetailView: View {
+                             .font(.system(.body, design: .monospaced))
+                             .foregroundColor(.secondary)
+                     }
++
++                    LabeledContent("Hotkey Letter") {
++                        TextField("", text: $draft.activationKey)
++                            .textFieldStyle(.roundedBorder)
++                            .frame(width: 52)
++                            .onChange(of: draft.activationKey) { _, newValue in
++                                draft.activationKey = normalizedActivationKeyText(newValue)
++                            }
++                    }
+                 }
+ 
+                 Section("Window Behavior") {
+@@ -378,12 +390,27 @@ struct AppRuleAddSheet: View {
+ 
+                     DisclosureGroup("Pick from running apps", isExpanded: $isPickerExpanded) {
+                         if runningApps.isEmpty {
+-                            Text("No apps with windows found")
+-                                .foregroundColor(.secondary)
+-                                .font(.caption)
++                            VStack(alignment: .leading, spacing: 8) {
++                                Text("No apps with windows found")
++                                    .foregroundColor(.secondary)
++                                    .font(.caption)
++                                Button {
++                                    refreshRunningApps()
++                                } label: {
++                                    Label("Refresh", systemImage: "arrow.clockwise")
++                                }
++                                .buttonStyle(.bordered)
++                            }
+                         } else {
+                             ScrollView {
+                                 LazyVStack(alignment: .leading, spacing: 4) {
++                                    Button {
++                                        refreshRunningApps()
++                                    } label: {
++                                        Label("Refresh", systemImage: "arrow.clockwise")
++                                    }
++                                    .buttonStyle(.bordered)
++
+                                     ForEach(runningApps) { app in
+                                         RunningAppRow(
+                                             app: app,
+@@ -397,7 +424,12 @@ struct AppRuleAddSheet: View {
+                         }
+                     }
+                     .onAppear {
+-                        runningApps = controller.runningAppsWithWindows()
++                        refreshRunningApps()
++                    }
++                    .onChange(of: isPickerExpanded) { _, isExpanded in
++                        if isExpanded {
++                            refreshRunningApps()
++                        }
+                     }
+ 
+                     if let appInfo = selectedAppInfo {
+@@ -417,6 +449,15 @@ struct AppRuleAddSheet: View {
+                     Text("Examples: com.apple.finder or dentalplus-air")
+                         .font(.caption)
+                         .foregroundColor(.secondary)
++
++                    LabeledContent("Hotkey Letter") {
++                        TextField("", text: $draft.activationKey)
++                            .textFieldStyle(.roundedBorder)
++                            .frame(width: 52)
++                            .onChange(of: draft.activationKey) { _, newValue in
++                                draft.activationKey = normalizedActivationKeyText(newValue)
++                            }
++                    }
+                 }
+ 
+                 Section("Window Behavior") {
+@@ -538,6 +579,11 @@ struct AppRuleAddSheet: View {
+         isPickerExpanded = false
+     }
+ 
++    private func refreshRunningApps() {
++        runningApps = controller.runningAppsWithWindows()
++        selectedAppInfo = runningApps.first { $0.bundleId == draft.bundleId }
++    }
++
+     private func useCurrentWindowSize(_ size: CGSize) {
+         draft.minWidth = size.width
+         draft.minHeight = size.height
+@@ -546,6 +592,14 @@ struct AppRuleAddSheet: View {
+     }
+ }
+ 
++private func normalizedActivationKeyText(_ value: String) -> String {
++    guard let scalar = value.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.first else {
++        return ""
++    }
++    let uppercased = String(scalar).uppercased()
++    return AppRule.normalizedActivationKey(uppercased) ?? ""
++}
++
+ struct AdvancedMatchersEditor: View {
+     @Binding var draft: AppRuleDraft
+     let regexError: String?
+diff --git a/Tests/OmniWMTests/SettingsStoreTests.swift b/Tests/OmniWMTests/SettingsStoreTests.swift
+index c139908..7c62d58 100644
+--- a/Tests/OmniWMTests/SettingsStoreTests.swift
++++ b/Tests/OmniWMTests/SettingsStoreTests.swift
+@@ -527,6 +527,23 @@ struct HotkeySurfaceTests {
+         #expect(!ids.contains("summonWorkspace.8"))
+         #expect(ids.contains("focusMonitorNext"))
+         #expect(ids.contains("focusMonitorLast"))
++        #expect(ids.contains("moveWorkspaceToNextMonitor"))
++    }
++
++    @Test @MainActor func settingsStoreAppendsNewDefaultHotkeysToPersistedList() {
++        let settings = SettingsStore(defaults: makeTestDefaults())
++        let customMoveLeft = HotkeyBinding(
++            id: "move.left",
++            command: .move(.left),
++            binding: KeyBinding(keyCode: UInt32(kVK_ANSI_J), modifiers: UInt32(optionKey))
++        )
++        var export = SettingsExport.defaults()
++        export.hotkeyBindings = [customMoveLeft]
++
++        settings.applyExport(export, monitors: [])
++
++        #expect(settings.hotkeyBindings.first { $0.id == "move.left" }?.binding == customMoveLeft.binding)
++        #expect(settings.hotkeyBindings.contains { $0.id == "moveWorkspaceToNextMonitor" })
+     }
+ 
+     @Test func hotkeyBindingEncodesWithoutSerializedCommand() throws {
+-- 
+2.50.1 (Apple Git-155)
+
+
+From dab9eca08f3d26b178775599ca4be7133643805a Mon Sep 17 00:00:00 2001
+From: pmorais <pmorais@pmoraiss-MacBook-Pro.local>
+Date: Wed, 20 May 2026 20:04:44 -0300
+Subject: [PATCH 2/3] Learn observed window sizes from AX verification
+
+- Treat observed frame sizes as learned constraints instead of creating resize placeholders
+- Update Niri layout sizing and centering to match observed window dimensions
+- Add coverage for observed minimum and maximum size learning
+---
+ .../Controller/LayoutRefreshController.swift  | 119 ++++++++++--
+ .../OmniWM/Core/Layout/Niri/NiriLayout.swift  |  14 +-
+ .../Layout/Niri/NiriLayoutEngine+Sizing.swift |  48 +++++
+ .../LayoutRefreshControllerTests.swift        | 176 ++++++++++++++++--
+ Tests/OmniWMTests/NiriLayoutEngineTests.swift |  33 ++++
+ 5 files changed, 353 insertions(+), 37 deletions(-)
+
+diff --git a/Sources/OmniWM/Core/Controller/LayoutRefreshController.swift b/Sources/OmniWM/Core/Controller/LayoutRefreshController.swift
+index dfb4121..b418961 100644
+--- a/Sources/OmniWM/Core/Controller/LayoutRefreshController.swift
++++ b/Sources/OmniWM/Core/Controller/LayoutRefreshController.swift
+@@ -177,6 +177,7 @@ import QuartzCore
+     private var activeFrameContext: RefreshFrameContext?
+     private var pendingRevealTransactionsByWindowId: [Int: PendingRevealTransaction] = [:]
+     private var pendingRevealVerificationTasksByWindowId: [Int: Task<Void, Never>] = [:]
++    private var observedLayoutConstraintTokens: Set<WindowToken> = []
+ 
+     func fastFrame(for token: WindowToken, axRef: AXWindowRef) -> CGRect? {
+         activeFrameContext?.fastFrame(for: token, axRef: axRef)
+@@ -558,7 +559,11 @@ import QuartzCore
+                 LayoutWindowSnapshot(
+                     token: entry.token,
+                     constraints: mergedConstraints,
+-                    layoutConstraints: mergedConstraints.relaxedForResizePlaceholder(),
++                    layoutConstraints: shouldUseObservedLayoutConstraints(
++                        for: entry.token
++                    )
++                        ? mergedConstraints
++                        : mergedConstraints.relaxedForResizePlaceholder(),
+                     hiddenState: controller.workspaceManager.hiddenState(for: entry.token),
+                     layoutReason: layoutReason,
+                     showsNativeFullscreenPlaceholder: controller.workspaceManager
+@@ -2830,23 +2835,17 @@ import QuartzCore
+     func shouldObserveResizePlaceholderFallback(
+         entry: WindowModel.Entry,
+         targetFrame: CGRect
++    ) -> Bool {
++        shouldObserveAdaptiveFrameResult(entry: entry, targetFrame: targetFrame)
++    }
++
++    private func shouldObserveAdaptiveFrameResult(
++        entry: WindowModel.Entry,
++        targetFrame _: CGRect
+     ) -> Bool {
+         guard controller?.workspaceManager.resizePlaceholderState(for: entry.token) == nil else { return false }
+         guard entry.layoutReason == .standard else { return false }
+         guard controller?.workspaceManager.hiddenState(for: entry.token) == nil else { return false }
+-        if let constraints = controller?.workspaceManager.cachedConstraints(for: entry.token),
+-           targetFrameIsBelowMinimumSize(targetFrame, minimumSize: constraints.minSize)
+-        {
+-            return true
+-        }
+-        if let currentFrame = fastFrame(for: entry.token, axRef: entry.axRef) {
+-            return targetSizeIsSmallerThanObservedSize(targetFrame.size, observedSize: currentFrame.size)
+-        }
+-        if let lastAppliedFrame = controller?.axManager.lastAppliedFrame(for: entry.windowId),
+-           !targetSizeIsSmallerThanObservedSize(targetFrame.size, observedSize: lastAppliedFrame.size)
+-        {
+-            return false
+-        }
+         return true
+     }
+ 
+@@ -2874,6 +2873,10 @@ import QuartzCore
+             return
+         }
+ 
++        if adaptLayoutToObservedWindowSizeIfNeeded(result, entry: entry, workspaceId: workspaceId) {
++            return
++        }
++
+         guard let minimumSize = resizePlaceholderFallbackMinimumSize(for: result, entry: entry) else { return }
+ 
+         let observedFrame = result.writeResult.observedFrame
+@@ -2948,6 +2951,89 @@ import QuartzCore
+         }
+     }
+ 
++    private func adaptLayoutToObservedWindowSizeIfNeeded(
++        _ result: AXFrameApplyResult,
++        entry: WindowModel.Entry,
++        workspaceId: WorkspaceDescriptor.ID
++    ) -> Bool {
++        guard let controller,
++              entry.layoutReason == .standard,
++              controller.workspaceManager.hiddenState(for: entry.token) == nil,
++              let observedFrame = result.writeResult.observedFrame,
++              targetSizeDiffersFromObservedSize(result.targetFrame.size, observedSize: observedFrame.size),
++              observedFrame.width.isFinite,
++              observedFrame.height.isFinite,
++              observedFrame.width > 1,
++              observedFrame.height > 1
++        else {
++            return false
++        }
++
++        let constraints = resizePlaceholderFallbackConstraints(for: entry, observedFrame: observedFrame)
++        var learnedConstraints = constraints
++
++        if result.targetFrame.width + 0.5 < observedFrame.width {
++            learnedConstraints.minSize.width = max(
++                learnedConstraints.minSize.width,
++                observedFrame.width.rounded(.up)
++            )
++        }
++        if result.targetFrame.width > observedFrame.width + 0.5 {
++            learnedConstraints.minSize.width = min(learnedConstraints.minSize.width, observedFrame.width.rounded(.down))
++            learnedConstraints.maxSize.width = observedFrame.width.rounded(.down)
++        }
++        if result.targetFrame.height + 0.5 < observedFrame.height {
++            learnedConstraints.minSize.height = max(
++                learnedConstraints.minSize.height,
++                observedFrame.height.rounded(.up)
++            )
++        }
++        if result.targetFrame.height > observedFrame.height + 0.5 {
++            learnedConstraints.minSize.height = min(learnedConstraints.minSize.height, observedFrame.height.rounded(.down))
++            learnedConstraints.maxSize.height = observedFrame.height.rounded(.down)
++        }
++
++        learnedConstraints = learnedConstraints.normalized()
++
++        controller.workspaceManager.setCachedConstraints(learnedConstraints, for: entry.token)
++        observedLayoutConstraintTokens.insert(entry.token)
++        controller.niriEngine?.updateWindowConstraints(for: entry.token, constraints: learnedConstraints)
++        controller.dwindleEngine?.updateWindowConstraints(for: entry.token, constraints: learnedConstraints)
++        adaptNiriContainerToObservedWindowSize(entry: entry, workspaceId: workspaceId, observedSize: observedFrame.size)
++        controller.axManager.confirmFrameWrite(for: result.windowId, frame: observedFrame)
++        controller.clearResizePlaceholder(for: entry.token)
++        requestRelayout(reason: .axWindowChanged, affectedWorkspaceIds: [workspaceId])
++        return true
++    }
++
++    private func adaptNiriContainerToObservedWindowSize(
++        entry: WindowModel.Entry,
++        workspaceId: WorkspaceDescriptor.ID,
++        observedSize: CGSize
++    ) {
++        guard let controller,
++              let engine = controller.niriEngine,
++              let monitor = controller.workspaceManager.monitor(for: workspaceId)
++        else {
++            return
++        }
++
++        let orientation = engine.monitor(for: monitor.id)?.orientation
++            ?? controller.settings.effectiveOrientation(for: monitor)
++        engine.adaptWindowContainerToObservedSize(
++            token: entry.token,
++            observedSize: observedSize,
++            in: workspaceId,
++            orientation: orientation
++        )
++    }
++
++    private func shouldUseObservedLayoutConstraints(
++        for token: WindowToken
++    ) -> Bool {
++        observedLayoutConstraintTokens.contains(token)
++    }
++
+     private func resizePlaceholderFallbackConstraints(
+         for entry: WindowModel.Entry,
+         observedFrame: CGRect?
+@@ -2975,6 +3061,11 @@ import QuartzCore
+             || targetSize.height + 0.5 < observedSize.height
+     }
+ 
++    private func targetSizeDiffersFromObservedSize(_ targetSize: CGSize, observedSize: CGSize) -> Bool {
++        abs(targetSize.width - observedSize.width) > 0.5
++            || abs(targetSize.height - observedSize.height) > 0.5
++    }
++
+     private func fallbackResizeMinimumSize(
+         targetSize: CGSize,
+         observedSize: CGSize?,
+diff --git a/Sources/OmniWM/Core/Layout/Niri/NiriLayout.swift b/Sources/OmniWM/Core/Layout/Niri/NiriLayout.swift
+index 863b8b9..03c0d27 100644
+--- a/Sources/OmniWM/Core/Layout/Niri/NiriLayout.swift
++++ b/Sources/OmniWM/Core/Layout/Niri/NiriLayout.swift
+@@ -727,11 +727,17 @@ extension NiriLayoutEngine {
+         let windowRenderOffsets = windows.map { $0.renderOffset(at: time) }
+         let windowTokens = windows.map { $0.token }
+ 
+-        var pos: CGFloat = switch orientation {
+-        case .horizontal: contentRect.origin.y
+-        case .vertical: contentRect.origin.x
++        var pos: CGFloat
++        switch orientation {
++        case .horizontal:
++            let usedHeight = isTabbed
++                ? (resolvedSpans.max() ?? 0) + secondaryGap * 2
++                : resolvedSpans.reduce(0, +) + secondaryGap * CGFloat(windows.count + 1)
++            let centeredOffset = max(0, contentRect.height - usedHeight) / 2
++            pos = contentRect.origin.y + secondaryGap + centeredOffset
++        case .vertical:
++            pos = contentRect.origin.x + secondaryGap
+         }
+-        pos += secondaryGap
+ 
+         for i in 0 ..< windows.count {
+             let span = resolvedSpans[i]
+diff --git a/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Sizing.swift b/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Sizing.swift
+index 6eba463..bc5a6b5 100644
+--- a/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Sizing.swift
++++ b/Sources/OmniWM/Core/Layout/Niri/NiriLayoutEngine+Sizing.swift
+@@ -474,6 +474,54 @@ extension NiriLayoutEngine {
+         )
+     }
+ 
++    @discardableResult
++    func adaptWindowContainerToObservedSize(
++        token: WindowToken,
++        observedSize: CGSize,
++        in workspaceId: WorkspaceDescriptor.ID,
++        orientation: Monitor.Orientation
++    ) -> Bool {
++        guard observedSize.width.isFinite,
++              observedSize.height.isFinite,
++              observedSize.width > 1,
++              observedSize.height > 1,
++              let window = findNode(for: token),
++              window.sizingMode == .normal,
++              let column = findColumn(containing: window, in: workspaceId)
++        else {
++            return false
++        }
++
++        cancelInteractiveResize(for: column, in: workspaceId)
++
++        switch orientation {
++        case .horizontal:
++            let targetColumnWidth = columnWidth(forWindowWidth: observedSize.width, in: column)
++            column.width = .fixed(targetColumnWidth)
++            column.cachedWidth = targetColumnWidth
++            column.widthAnimation = nil
++            column.targetWidth = nil
++            column.presetWidthIdx = nil
++            column.isFullWidth = false
++            column.savedWidth = nil
++            column.hasManualSingleWindowWidthOverride = true
++
++            window.height = .fixed(observedSize.height)
++            window.savedHeight = nil
++            window.resolvedHeight = observedSize.height
++        case .vertical:
++            column.height = .fixed(observedSize.height)
++            column.cachedHeight = observedSize.height
++            column.isFullHeight = false
++            column.savedHeight = nil
++
++            window.windowWidth = .fixed(observedSize.width)
++            window.resolvedWidth = observedSize.width
++        }
++
++        return true
++    }
++
+     func toggleFullWidth(
+         _ column: NiriContainer,
+         in workspaceId: WorkspaceDescriptor.ID,
+diff --git a/Tests/OmniWMTests/LayoutRefreshControllerTests.swift b/Tests/OmniWMTests/LayoutRefreshControllerTests.swift
+index 2b90fee..5e0240d 100644
+--- a/Tests/OmniWMTests/LayoutRefreshControllerTests.swift
++++ b/Tests/OmniWMTests/LayoutRefreshControllerTests.swift
+@@ -228,13 +228,13 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
+         #expect(controller.axManager.lastAppliedFrame(for: token.windowId) == restoredFrame)
+     }
+ 
+-    @Test @MainActor func executeLayoutPlanCreatesResizePlaceholderAfterAXSizeRefusal() async {
++    @Test @MainActor func executeLayoutPlanLearnsObservedMinimumSizeAfterAXSizeRefusal() async {
+         await withAXFrameProviderIsolationForTests {
+             let controller = makeLayoutPlanTestController()
+             guard let monitor = controller.workspaceManager.monitors.first,
+                   let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+             else {
+-                Issue.record("Missing monitor or active workspace for resize placeholder fallback test")
++                Issue.record("Missing monitor or active workspace for observed size learning test")
+                 return
+             }
+ 
+@@ -274,26 +274,30 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
+                 )
+             )
+ 
+-            let createdPlaceholder = await waitForConditionForTests {
+-                controller.resizePlaceholderManager.snapshotForTests()[token]?.frame == targetFrame
+-                    && controller.workspaceManager.resizePlaceholderState(for: token)?.frame == targetFrame
++            let learnedMinimumSize = await waitForConditionForTests {
++                controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
++                    width: currentFrame.width,
++                    height: currentFrame.height
++                )
+             }
+ 
+-            #expect(createdPlaceholder)
+-            #expect(controller.workspaceManager.resizePlaceholderState(for: token)?.minimumSize == CGSize(
++            #expect(learnedMinimumSize)
++            #expect(controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
+                 width: currentFrame.width,
+                 height: currentFrame.height
+             ))
++            #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
++            #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
+         }
+     }
+ 
+-    @Test @MainActor func executeLayoutPlanIgnoresSizeOnlyVerificationMismatchForResizePlaceholder() async {
++    @Test @MainActor func executeLayoutPlanLearnsObservedMinimumSizeAfterSizeOnlyVerificationMismatch() async {
+         await withAXFrameProviderIsolationForTests {
+             let controller = makeLayoutPlanTestController()
+             guard let monitor = controller.workspaceManager.monitors.first,
+                   let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+             else {
+-                Issue.record("Missing monitor or active workspace for resize placeholder verification mismatch test")
++                Issue.record("Missing monitor or active workspace for verification mismatch size learning test")
+                 return
+             }
+ 
+@@ -333,23 +337,27 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
+                 )
+             )
+ 
+-            let completedRetry = await waitForConditionForTests {
+-                controller.axManager.recentFrameWriteFailure(for: token.windowId) == .verificationMismatch
++            let learnedMinimumSize = await waitForConditionForTests {
++                controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
++                    width: observedFrame.width,
++                    height: observedFrame.height
++                )
+             }
+ 
+-            #expect(completedRetry)
++            #expect(learnedMinimumSize)
++            #expect(controller.axManager.recentFrameWriteFailure(for: token.windowId) == nil)
+             #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
+             #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
+         }
+     }
+ 
+-    @Test @MainActor func executeLayoutPlanCreatesResizePlaceholderWhenVerificationMismatchHasConstraintProof() async {
++    @Test @MainActor func executeLayoutPlanExpandsKnownMinimumSizeWhenObservedFrameIsLarger() async {
+         await withAXFrameProviderIsolationForTests {
+             let controller = makeLayoutPlanTestController()
+             guard let monitor = controller.workspaceManager.monitors.first,
+                   let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+             else {
+-                Issue.record("Missing monitor or active workspace for resize placeholder constraint proof test")
++                Issue.record("Missing monitor or active workspace for known minimum expansion test")
+                 return
+             }
+ 
+@@ -398,13 +406,143 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
+                 )
+             )
+ 
+-            let createdPlaceholder = await waitForConditionForTests {
+-                controller.resizePlaceholderManager.snapshotForTests()[token]?.frame == targetFrame
+-                    && controller.workspaceManager.resizePlaceholderState(for: token)?.frame == targetFrame
++            let learnedMinimumSize = await waitForConditionForTests {
++                controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
++                    width: observedFrame.width,
++                    height: observedFrame.height
++                )
++            }
++
++            #expect(learnedMinimumSize)
++            #expect(controller.workspaceManager.cachedConstraints(for: token)?.minSize == CGSize(
++                width: observedFrame.width,
++                height: observedFrame.height
++            ))
++            #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
++            #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
++        }
++    }
++
++    @Test @MainActor func executeLayoutPlanLearnsObservedMaximumSizeWhenWindowCannotGrow() async {
++        await withAXFrameProviderIsolationForTests {
++            let controller = makeLayoutPlanTestController()
++            guard let monitor = controller.workspaceManager.monitors.first,
++                  let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
++            else {
++                Issue.record("Missing monitor or active workspace for observed max size learning test")
++                return
++            }
++
++            let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 119)
++            let targetFrame = CGRect(x: 40, y: 50, width: 900, height: 700)
++            let observedFrame = CGRect(x: 40, y: 50, width: 320, height: 220)
++
++            controller.axManager.frameApplyOverrideForTests = { requests in
++                requests.map { request in
++                    AXFrameApplyResult(
++                        requestId: request.requestId,
++                        pid: request.pid,
++                        windowId: request.windowId,
++                        targetFrame: request.frame,
++                        currentFrameHint: request.currentFrameHint,
++                        writeResult: layoutRefreshControllerTestWriteResult(
++                            targetFrame: request.frame,
++                            currentFrameHint: request.currentFrameHint,
++                            observedFrame: observedFrame,
++                            failureReason: .verificationMismatch
++                        )
++                    )
++                }
++            }
++
++            var diff = WorkspaceLayoutDiff()
++            diff.frameChanges = [
++                LayoutFrameChange(token: token, frame: targetFrame, forceApply: false)
++            ]
++
++            controller.layoutRefreshController.executeLayoutPlan(
++                WorkspaceLayoutPlan(
++                    workspaceId: workspaceId,
++                    monitor: controller.layoutRefreshController.buildMonitorSnapshot(for: monitor),
++                    sessionPatch: WorkspaceSessionPatch(workspaceId: workspaceId),
++                    diff: diff
++                )
++            )
++
++            let learnedMaximumSize = await waitForConditionForTests {
++                controller.workspaceManager.cachedConstraints(for: token)?.maxSize == CGSize(
++                    width: observedFrame.width,
++                    height: observedFrame.height
++                )
++            }
++
++            #expect(learnedMaximumSize)
++            #expect(controller.resizePlaceholderManager.snapshotForTests()[token] == nil)
++            #expect(controller.workspaceManager.resizePlaceholderState(for: token) == nil)
++        }
++    }
++
++    @Test @MainActor func executeLayoutPlanLearnsObservedMaximumSizeWhenLiveFrameAlreadyShowsSmallWindow() async {
++        await withAXFrameProviderIsolationForTests {
++            let controller = makeLayoutPlanTestController()
++            guard let monitor = controller.workspaceManager.monitors.first,
++                  let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
++            else {
++                Issue.record("Missing monitor or active workspace for live max size learning test")
++                return
++            }
++
++            let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 120)
++            let targetFrame = CGRect(x: 40, y: 50, width: 900, height: 700)
++            let observedFrame = CGRect(x: 40, y: 50, width: 320, height: 220)
++
++            AXWindowService.fastFrameProviderForTests = { window in
++                window.windowId == token.windowId ? observedFrame : fallbackFastFrameForTests(window)
++            }
++            defer {
++                AXWindowService.fastFrameProviderForTests = nil
++            }
++
++            controller.axManager.frameApplyOverrideForTests = { requests in
++                requests.map { request in
++                    AXFrameApplyResult(
++                        requestId: request.requestId,
++                        pid: request.pid,
++                        windowId: request.windowId,
++                        targetFrame: request.frame,
++                        currentFrameHint: request.currentFrameHint,
++                        writeResult: layoutRefreshControllerTestWriteResult(
++                            targetFrame: request.frame,
++                            currentFrameHint: request.currentFrameHint,
++                            observedFrame: observedFrame,
++                            failureReason: .verificationMismatch
++                        )
++                    )
++                }
++            }
++
++            var diff = WorkspaceLayoutDiff()
++            diff.frameChanges = [
++                LayoutFrameChange(token: token, frame: targetFrame, forceApply: false)
++            ]
++
++            controller.layoutRefreshController.executeLayoutPlan(
++                WorkspaceLayoutPlan(
++                    workspaceId: workspaceId,
++                    monitor: controller.layoutRefreshController.buildMonitorSnapshot(for: monitor),
++                    sessionPatch: WorkspaceSessionPatch(workspaceId: workspaceId),
++                    diff: diff
++                )
++            )
++
++            let learnedMaximumSize = await waitForConditionForTests {
++                controller.workspaceManager.cachedConstraints(for: token)?.maxSize == CGSize(
++                    width: observedFrame.width,
++                    height: observedFrame.height
++                )
+             }
+ 
+-            #expect(createdPlaceholder)
+-            #expect(controller.workspaceManager.resizePlaceholderState(for: token)?.minimumSize == minimumSize)
++            #expect(learnedMaximumSize)
+         }
+     }
+ 
+diff --git a/Tests/OmniWMTests/NiriLayoutEngineTests.swift b/Tests/OmniWMTests/NiriLayoutEngineTests.swift
+index 22482eb..567d326 100644
+--- a/Tests/OmniWMTests/NiriLayoutEngineTests.swift
++++ b/Tests/OmniWMTests/NiriLayoutEngineTests.swift
+@@ -1894,6 +1894,39 @@ private func makeCenteredCrossMonitorFixture(
+         #expect(abs(topFrame.height - 884) < 0.001)
+     }
+ 
++    @Test func observedShortWindowIsCenteredVerticallyInColumn() {
++        let engine = NiriLayoutEngine(maxWindowsPerColumn: 1, maxVisibleColumns: 2)
++        let workspaceId = UUID()
++        let window = engine.addWindow(handle: makeTestHandle(), to: workspaceId, afterSelection: nil)
++        let observedSize = CGSize(width: 320, height: 220)
++
++        let adapted = engine.adaptWindowContainerToObservedSize(
++            token: window.token,
++            observedSize: observedSize,
++            in: workspaceId,
++            orientation: .horizontal
++        )
++
++        let monitor = makeLayoutPlanTestMonitor(width: 1000, height: 800)
++        let gaps = LayoutGaps(horizontal: 8, vertical: 8)
++        let layout = engine.calculateCombinedLayoutWithVisibility(
++            in: workspaceId,
++            monitor: monitor,
++            gaps: gaps,
++            state: ViewportState()
++        )
++
++        guard let frame = layout.frames[window.token] else {
++            Issue.record("Expected a rendered frame for the observed short Niri window")
++            return
++        }
++
++        #expect(adapted)
++        #expect(abs(frame.width - observedSize.width) < 0.001)
++        #expect(abs(frame.height - observedSize.height) < 0.001)
++        #expect(abs(frame.midY - monitor.frame.midY) < 0.001)
++    }
++
+     @Test func verticalTabbedColumnUsesOnlyOuterGapsForSharedTileFrame() {
+         let engine = NiriLayoutEngine(maxWindowsPerColumn: 3, maxVisibleColumns: 1)
+         let workspaceId = UUID()
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 2ae546fb1585b434ec58a513c5385ed69792bd52 Mon Sep 17 00:00:00 2001
+From: pmorais <pmorais@pmoraiss-MacBook-Pro.local>
+Date: Thu, 21 May 2026 16:32:25 -0300
+Subject: [PATCH 3/3] Remap navigation shortcuts and preserve visible viewport
+ offset
+
+- Update default hotkeys and canonical settings
+- Keep leading navigation from shifting the viewport for already visible Niri windows
+- Add a regression test for visible leading navigation
+---
+ README.md                                     | 20 +++----
+ .../Core/Controller/WindowActionHandler.swift | 28 +++++++++-
+ Sources/OmniWM/Core/Input/ActionCatalog.swift | 28 +++++-----
+ .../Fixtures/canonical-settings.toml          | 28 +++++-----
+ Tests/OmniWMTests/RefreshRoutingTests.swift   | 53 +++++++++++++++++++
+ 5 files changed, 118 insertions(+), 39 deletions(-)
+
+diff --git a/README.md b/README.md
+index e9cbefc..7138da6 100644
+--- a/README.md
++++ b/README.md
+@@ -264,8 +264,8 @@ Layout legend:
+ | Switch to Previous Workspace (Back and Forth) | `Control + Option + Tab` | `Shared` |
+ | Switch to Next Workspace | `Unassigned` | `Shared` |
+ | Switch to Previous Workspace (Sequential) | `Unassigned` | `Shared` |
+-| Move Window to Workspace Up | `Control + Option + Shift + Up Arrow` | `Shared` |
+-| Move Window to Workspace Down | `Control + Option + Shift + Down Arrow` | `Shared` |
++| Move Window to Workspace Up | `Option + Shift + Up Arrow` | `Shared` |
++| Move Window to Workspace Down | `Option + Shift + Down Arrow` | `Shared` |
+ | Move Column to Workspace 1-9 | `Unassigned` | `Niri` |
+ | Move Column to Workspace Up | `Control + Option + Shift + Page Up` | `Niri` |
+ | Move Column to Workspace Down | `Control + Option + Shift + Page Down` | `Niri` |
+@@ -275,7 +275,7 @@ Layout legend:
+ | Action | Default Shortcut | Layout |
+ |--------|------------------|--------|
+ | Focus Left / Right / Up / Down | `Option + Arrow Keys` | `Shared` |
+-| Focus Previous Window | `Option + Tab` | `Niri` |
++| Focus Previous Window | `Unassigned` | `Niri` |
+ | Traverse Backward | `Unassigned` | `Niri` |
+ | Traverse Forward | `Unassigned` | `Niri` |
+ | Focus First Column | `Option + Home` | `Niri` |
+@@ -292,13 +292,13 @@ Layout legend:
+ 
+ | Action | Default Shortcut | Layout |
+ |--------|------------------|--------|
+-| Move Left / Right / Up / Down | `Option + Shift + Arrow Keys` | `Shared` |
++| Move Left / Right / Up / Down | `Unassigned` | `Shared` |
+ 
+ #### Monitor
+ 
+ | Action | Default Shortcut | Layout |
+ |--------|------------------|--------|
+-| Focus Next Monitor | `Control + Command + Tab` | `Shared` |
++| Focus Next Monitor | `Option + Tab` | `Shared` |
+ | Focus Previous Monitor | `Unassigned` | `Shared` |
+ | Focus Last Monitor | `` Control + Command + ` `` | `Shared` |
+ 
+@@ -306,9 +306,9 @@ Layout legend:
+ 
+ | Action | Default Shortcut | Layout |
+ |--------|------------------|--------|
+-| Toggle Fullscreen | `Option + Return` | `Shared` |
++| Toggle Fullscreen | `Option + Shift + F` | `Shared` |
+ | Toggle Native Fullscreen | `Unassigned` | `Shared` |
+-| Balance Sizes | `Option + Shift + B` | `Shared` |
++| Balance Sizes | `Option + /` | `Shared` |
+ | Move to Root | `Unassigned` | `Dwindle` |
+ | Toggle Split | `Unassigned` | `Dwindle` |
+ | Swap Split | `Unassigned` | `Dwindle` |
+@@ -317,7 +317,7 @@ Layout legend:
+ | Preselect Left / Right / Up / Down | `Unassigned` | `Dwindle` |
+ | Clear Preselection | `Unassigned` | `Dwindle` |
+ | Raise All Floating Windows | `Option + Shift + R` | `Shared` |
+-| Toggle Focused Window Floating | `Unassigned` | `Shared` |
++| Toggle Focused Window Floating | `Option + F` | `Shared` |
+ | Assign Focused Window to Scratchpad | `Unassigned` | `Shared` |
+ | Toggle Scratchpad Window | `Unassigned` | `Shared` |
+ | Toggle Workspace Layout | `Option + Shift + L` | `Shared` |
+@@ -326,11 +326,11 @@ Layout legend:
+ 
+ | Action | Default Shortcut | Layout |
+ |--------|------------------|--------|
+-| Move Column Left / Right | `Control + Option + Shift + Left / Right Arrow` | `Niri` |
++| Move Column Left / Right | `Option + Shift + Left / Right Arrow` | `Niri` |
+ | Toggle Column Tabbed | `Option + T` | `Niri` |
+ | Cycle Column Width Forward | `Option + .` | `Shared` |
+ | Cycle Column Width Backward | `Option + ,` | `Shared` |
+-| Toggle Column Full Width | `Option + Shift + F` | `Niri` |
++| Toggle Column Full Width | `Unassigned` | `Niri` |
+ 
+ In Niri, `Move Left / Right` expels the focused window out of multi-window columns or consumes a single-window column into the adjacent column. `Move Up / Down` keeps the current in-column reorder behavior.
+ 
+diff --git a/Sources/OmniWM/Core/Controller/WindowActionHandler.swift b/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
+index 203e737..66e923b 100644
+--- a/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
++++ b/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
+@@ -436,7 +436,15 @@ final class WindowActionHandler {
+                         viewportWidth: monitor.visibleFrame.width
+                     )
+                 case .leading:
+-                    targetState.snapToColumnLeading(colIdx, columns: cols, gap: gap)
++                    if !isVisibleInCurrentViewport(
++                        niriWindow,
++                        token: token,
++                        workspaceId: workspaceId,
++                        currentWorkspaceId: currentWsId,
++                        monitor: monitor
++                    ) {
++                        targetState.snapToColumnLeading(colIdx, columns: cols, gap: gap)
++                    }
+                 }
+             }
+         }
+@@ -455,6 +463,24 @@ final class WindowActionHandler {
+         return true
+     }
+ 
++    private func isVisibleInCurrentViewport(
++        _ window: NiriWindow,
++        token: WindowToken,
++        workspaceId: WorkspaceDescriptor.ID,
++        currentWorkspaceId: WorkspaceDescriptor.ID?,
++        monitor: Monitor
++    ) -> Bool {
++        guard let controller else { return false }
++        guard workspaceId == currentWorkspaceId else { return false }
++        guard controller.workspaceManager.hiddenState(for: token) == nil else { return false }
++        guard let frame = window.renderedFrame ?? window.frame else { return false }
++
++        let viewportFrame = controller.insetWorkingFrame(for: monitor)
++        guard frame.intersects(viewportFrame) else { return false }
++        let visibleFrame = frame.intersection(viewportFrame)
++        return visibleFrame.width >= 1.0 && visibleFrame.height >= 1.0
++    }
++
+     @discardableResult
+     private func summonWindowRightInNiri(
+         token: WindowToken,
+diff --git a/Sources/OmniWM/Core/Input/ActionCatalog.swift b/Sources/OmniWM/Core/Input/ActionCatalog.swift
+index fd3a516..4326a3f 100644
+--- a/Sources/OmniWM/Core/Input/ActionCatalog.swift
++++ b/Sources/OmniWM/Core/Input/ActionCatalog.swift
+@@ -185,7 +185,7 @@ enum ActionCatalog {
+                 id: "focusPrevious",
+                 command: .focusPrevious,
+                 category: .focus,
+-                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(optionKey)),
++                binding: .unassigned,
+                 keywords: ["last focused", "recent window"]
+             )
+         )
+@@ -226,7 +226,7 @@ enum ActionCatalog {
+                 id: "moveWindowToWorkspaceUp",
+                 command: .moveWindowToWorkspaceUp,
+                 category: .workspace,
+-                binding: KeyBinding(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | controlKey | shiftKey))
++                binding: KeyBinding(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | shiftKey))
+             ),
+             action(
+                 id: "moveWindowToWorkspaceDown",
+@@ -234,7 +234,7 @@ enum ActionCatalog {
+                 category: .workspace,
+                 binding: KeyBinding(
+                     keyCode: UInt32(kVK_DownArrow),
+-                    modifiers: UInt32(optionKey | controlKey | shiftKey)
++                    modifiers: UInt32(optionKey | shiftKey)
+                 )
+             ),
+             action(
+@@ -267,25 +267,25 @@ enum ActionCatalog {
+                 id: "move.left",
+                 command: .move(.left),
+                 category: .move,
+-                binding: KeyBinding(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | shiftKey))
++                binding: .unassigned
+             ),
+             action(
+                 id: "move.down",
+                 command: .move(.down),
+                 category: .move,
+-                binding: KeyBinding(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(optionKey | shiftKey))
++                binding: .unassigned
+             ),
+             action(
+                 id: "move.up",
+                 command: .move(.up),
+                 category: .move,
+-                binding: KeyBinding(keyCode: UInt32(kVK_UpArrow), modifiers: UInt32(optionKey | shiftKey))
++                binding: .unassigned
+             ),
+             action(
+                 id: "move.right",
+                 command: .move(.right),
+                 category: .move,
+-                binding: KeyBinding(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(optionKey | shiftKey))
++                binding: .unassigned
+             )
+         ])
+ 
+@@ -330,7 +330,7 @@ enum ActionCatalog {
+                 id: "focusMonitorNext",
+                 command: .focusMonitorNext,
+                 category: .monitor,
+-                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(controlKey | cmdKey))
++                binding: KeyBinding(keyCode: UInt32(kVK_Tab), modifiers: UInt32(optionKey))
+             ),
+             action(
+                 id: "focusMonitorPrevious",
+@@ -357,7 +357,7 @@ enum ActionCatalog {
+                 id: "toggleFullscreen",
+                 command: .toggleFullscreen,
+                 category: .layout,
+-                binding: KeyBinding(keyCode: UInt32(kVK_Return), modifiers: UInt32(optionKey))
++                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey | shiftKey))
+             ),
+             action(
+                 id: "toggleNativeFullscreen",
+@@ -371,7 +371,7 @@ enum ActionCatalog {
+                 category: .column,
+                 binding: KeyBinding(
+                     keyCode: UInt32(kVK_LeftArrow),
+-                    modifiers: UInt32(optionKey | controlKey | shiftKey)
++                    modifiers: UInt32(optionKey | shiftKey)
+                 )
+             ),
+             action(
+@@ -380,7 +380,7 @@ enum ActionCatalog {
+                 category: .column,
+                 binding: KeyBinding(
+                     keyCode: UInt32(kVK_RightArrow),
+-                    modifiers: UInt32(optionKey | controlKey | shiftKey)
++                    modifiers: UInt32(optionKey | shiftKey)
+                 )
+             ),
+             action(
+@@ -489,7 +489,7 @@ enum ActionCatalog {
+                 id: "toggleColumnFullWidth",
+                 command: .toggleColumnFullWidth,
+                 category: .column,
+-                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey | shiftKey))
++                binding: .unassigned
+             ),
+             action(
+                 id: "expandColumnToAvailableWidth",
+@@ -549,7 +549,7 @@ enum ActionCatalog {
+                 id: "balanceSizes",
+                 command: .balanceSizes,
+                 category: .layout,
+-                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(optionKey | shiftKey))
++                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_Slash), modifiers: UInt32(optionKey))
+             ),
+             action(id: "moveToRoot", command: .moveToRoot, category: .layout, binding: .unassigned),
+             action(id: "toggleSplit", command: .toggleSplit, category: .layout, binding: .unassigned),
+@@ -646,7 +646,7 @@ enum ActionCatalog {
+                 id: "toggleFocusedWindowFloating",
+                 command: .toggleFocusedWindowFloating,
+                 category: .layout,
+-                binding: .unassigned,
++                binding: KeyBinding(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey)),
+                 keywords: ["float", "floating"]
+             ),
+             action(
+diff --git a/Tests/OmniWMTests/Fixtures/canonical-settings.toml b/Tests/OmniWMTests/Fixtures/canonical-settings.toml
+index c07cd3b..ead79b8 100644
+--- a/Tests/OmniWMTests/Fixtures/canonical-settings.toml
++++ b/Tests/OmniWMTests/Fixtures/canonical-settings.toml
+@@ -301,7 +301,7 @@ binding = "Option+Right Arrow"
+ id = "focus.right"
+ 
+ [[hotkeys]]
+-binding = "Option+Tab"
++binding = "Unassigned"
+ id = "focusPrevious"
+ 
+ [[hotkeys]]
+@@ -345,11 +345,11 @@ binding = "Unassigned"
+ id = "centerVisibleColumns"
+ 
+ [[hotkeys]]
+-binding = "Control+Option+Shift+Up Arrow"
++binding = "Option+Shift+Up Arrow"
+ id = "moveWindowToWorkspaceUp"
+ 
+ [[hotkeys]]
+-binding = "Control+Option+Shift+Down Arrow"
++binding = "Option+Shift+Down Arrow"
+ id = "moveWindowToWorkspaceDown"
+ 
+ [[hotkeys]]
+@@ -397,19 +397,19 @@ binding = "Unassigned"
+ id = "moveColumnToWorkspace.8"
+ 
+ [[hotkeys]]
+-binding = "Option+Shift+Left Arrow"
++binding = "Unassigned"
+ id = "move.left"
+ 
+ [[hotkeys]]
+-binding = "Option+Shift+Down Arrow"
++binding = "Unassigned"
+ id = "move.down"
+ 
+ [[hotkeys]]
+-binding = "Option+Shift+Up Arrow"
++binding = "Unassigned"
+ id = "move.up"
+ 
+ [[hotkeys]]
+-binding = "Option+Shift+Right Arrow"
++binding = "Unassigned"
+ id = "move.right"
+ 
+ [[hotkeys]]
+@@ -445,7 +445,7 @@ binding = "Unassigned"
+ id = "expelWindowFromColumn"
+ 
+ [[hotkeys]]
+-binding = "Control+Command+Tab"
++binding = "Option+Tab"
+ id = "focusMonitorNext"
+ 
+ [[hotkeys]]
+@@ -457,7 +457,7 @@ binding = "Control+Command+`"
+ id = "focusMonitorLast"
+ 
+ [[hotkeys]]
+-binding = "Option+Return"
++binding = "Option+Shift+F"
+ id = "toggleFullscreen"
+ 
+ [[hotkeys]]
+@@ -465,11 +465,11 @@ binding = "Unassigned"
+ id = "toggleNativeFullscreen"
+ 
+ [[hotkeys]]
+-binding = "Control+Option+Shift+Left Arrow"
++binding = "Option+Shift+Left Arrow"
+ id = "moveColumn.left"
+ 
+ [[hotkeys]]
+-binding = "Control+Option+Shift+Right Arrow"
++binding = "Option+Shift+Right Arrow"
+ id = "moveColumn.right"
+ 
+ [[hotkeys]]
+@@ -625,7 +625,7 @@ binding = "Unassigned"
+ id = "cycleWindowHeightBackward"
+ 
+ [[hotkeys]]
+-binding = "Option+Shift+F"
++binding = "Unassigned"
+ id = "toggleColumnFullWidth"
+ 
+ [[hotkeys]]
+@@ -661,7 +661,7 @@ binding = "Option+Shift+="
+ id = "setWindowHeight.increase10Percent"
+ 
+ [[hotkeys]]
+-binding = "Option+Shift+B"
++binding = "Option+/"
+ id = "balanceSizes"
+ 
+ [[hotkeys]]
+@@ -741,7 +741,7 @@ binding = "Unassigned"
+ id = "rescueOffscreenWindows"
+ 
+ [[hotkeys]]
+-binding = "Unassigned"
++binding = "Option+F"
+ id = "toggleFocusedWindowFloating"
+ 
+ [[hotkeys]]
+diff --git a/Tests/OmniWMTests/RefreshRoutingTests.swift b/Tests/OmniWMTests/RefreshRoutingTests.swift
+index cc4bb57..0a2cbac 100644
+--- a/Tests/OmniWMTests/RefreshRoutingTests.swift
++++ b/Tests/OmniWMTests/RefreshRoutingTests.swift
+@@ -3861,6 +3861,59 @@ private func syncNiriWorkspaceStatesForRefreshTests(
+         assertNoLegacyReasons(recorder)
+     }
+ 
++    @Test @MainActor func leadingNavigateToVisibleNiriWindowPreservesViewportOffset() async {
++        var focusRequests: [(pid_t, UInt32)] = []
++        let controller = makeRefreshTestController(
++            windowFocusOperations: WindowFocusOperations(
++                activateApp: { _ in },
++                focusSpecificWindow: { pid, windowId, _ in
++                    focusRequests.append((pid, windowId))
++                },
++                raiseWindow: { _ in }
++            )
++        )
++        guard let workspaceId = controller.activeWorkspace()?.id else {
++            Issue.record("Missing active workspace for visible leading navigation test")
++            return
++        }
++
++        let handlesByWindowId = await prepareNiriState(
++            on: controller,
++            assignments: [
++                (workspaceId, 4_411),
++                (workspaceId, 4_412),
++                (workspaceId, 4_413)
++            ],
++            focusedWindowId: 4_411
++        )
++        controller.layoutRefreshController.requestImmediateRelayout(reason: .workspaceTransition)
++        await waitForRefreshWork(on: controller)
++
++        guard let targetHandle = handlesByWindowId[4_412] else {
++            Issue.record("Missing target window handle for visible leading navigation test")
++            return
++        }
++
++        let offsetBefore = controller.workspaceManager
++            .niriViewportState(for: workspaceId)
++            .viewOffsetPixels
++            .current()
++
++        let didNavigate = controller.windowActionHandler.navigateToWindowInternal(
++            token: targetHandle.id,
++            workspaceId: workspaceId,
++            placement: .leading
++        )
++        await waitForRefreshWork(on: controller)
++
++        let stateAfter = controller.workspaceManager.niriViewportState(for: workspaceId)
++
++        #expect(didNavigate)
++        #expect(stateAfter.viewOffsetPixels.current() == offsetBefore)
++        #expect(controller.workspaceManager.lastFocusedToken(in: workspaceId) == targetHandle.id)
++        #expect(focusRequests.contains { $0.1 == UInt32(4_412) })
++    }
++
+     @Test @MainActor func focusWindowFromBarRevealsHiddenWindowOnInactiveWorkspace() async {
+         var focusRequests: [(pid_t, UInt32)] = []
+         let controller = makeRefreshTestController(
+-- 
+2.50.1 (Apple Git-155)
+

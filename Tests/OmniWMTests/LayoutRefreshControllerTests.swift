@@ -481,6 +481,62 @@ private func makeUnavailableLayoutPlanTestWindow(windowId: Int) -> AXWindowRef {
         }
     }
 
+    @Test @MainActor func executeLayoutPlanIgnoresTransientSmallerObservedFrameWithoutCurrentHint() async {
+        await withAXFrameProviderIsolationForTests {
+            let controller = makeLayoutPlanTestController()
+            guard let monitor = controller.workspaceManager.monitors.first,
+                  let workspaceId = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+            else {
+                Issue.record("Missing monitor or active workspace for transient smaller observed frame test")
+                return
+            }
+
+            controller.enableNiriLayout(maxWindowsPerColumn: 2)
+            await waitForLayoutPlanRefreshWork(on: controller)
+            controller.syncMonitorsToNiriEngine()
+
+            let token = addLayoutPlanTestWindow(on: controller, workspaceId: workspaceId, windowId: 122)
+            guard let engine = controller.niriEngine,
+                  let window = engine.findNode(for: token),
+                  let column = engine.findColumn(containing: window, in: workspaceId)
+            else {
+                Issue.record("Missing Niri node for transient smaller observed frame test")
+                return
+            }
+
+            let targetFrame = CGRect(x: 40, y: 50, width: 900, height: 700)
+            let observedFrame = CGRect(x: 40, y: 50, width: 320, height: 220)
+            column.width = .fixed(targetFrame.width)
+            column.cachedWidth = targetFrame.width
+
+            let result = AXFrameApplyResult(
+                pid: token.pid,
+                windowId: token.windowId,
+                targetFrame: targetFrame,
+                currentFrameHint: nil,
+                writeResult: layoutRefreshControllerTestWriteResult(
+                    targetFrame: targetFrame,
+                    currentFrameHint: nil,
+                    observedFrame: observedFrame,
+                    failureReason: .verificationMismatch
+                )
+            )
+
+            controller.layoutRefreshController.handleResizePlaceholderFrameApplyResult(
+                result,
+                workspaceId: workspaceId,
+                monitor: monitor,
+                sourceReason: .layoutCommand
+            )
+
+            #expect(controller.workspaceManager.cachedConstraints(for: token)?.maxSize != observedFrame.size)
+            #expect(column.width == .fixed(targetFrame.width))
+            #expect(column.cachedWidth == targetFrame.width)
+            #expect(window.height == .default)
+            #expect(window.resolvedHeight == nil)
+        }
+    }
+
     @Test @MainActor func executeLayoutPlanLearnsObservedMaximumSizeWhenLiveFrameAlreadyShowsSmallWindow() async {
         await withAXFrameProviderIsolationForTests {
             let controller = makeLayoutPlanTestController()

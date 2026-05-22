@@ -6381,7 +6381,7 @@ private func makeCenteredCrossMonitorFixture(
         }
     }
 
-    @Test func neighboringRightMonitorKeepsPartiallyRevealedColumnHiddenUntilFullyContained() {
+    @Test func neighboringRightMonitorAllowsPartiallyRevealedColumn() {
         let fixture = makeHorizontalNeighboringRevealFixture(workspaceOnPrimary: true, pidBase: 51)
         let engine = fixture.engine
         let wsId = fixture.workspaceId
@@ -6412,7 +6412,15 @@ private func makeCenteredCrossMonitorFixture(
             workingArea: fixture.area,
             animationTime: nil
         )
-        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == .right)
+        guard let partialFrame = partialRevealLayout.frames[leakingWindow.token] else {
+            Issue.record("Expected a partially revealed frame beside a neighboring right monitor")
+            return
+        }
+
+        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == nil)
+        #expect(partialFrame.minX < primaryMonitor.visibleFrame.maxX)
+        #expect(partialFrame.maxX > primaryMonitor.visibleFrame.maxX)
+        #expect(partialFrame.intersects(secondaryMonitor.frame))
 
         var fullRevealState = hiddenState
         fullRevealState.viewOffsetPixels = .static(primaryMonitor.visibleFrame.width + fixture.gap)
@@ -6470,7 +6478,7 @@ private func makeCenteredCrossMonitorFixture(
         #expect(maximizedLayout.hiddenHandles[leakingWindow.token] == .right)
     }
 
-    @Test func neighboringLeftMonitorKeepsPartiallyRevealedColumnHiddenUntilFullyContained() {
+    @Test func neighboringLeftMonitorAllowsPartiallyRevealedColumn() {
         let fixture = makeHorizontalNeighboringRevealFixture(workspaceOnPrimary: false, pidBase: 61)
         let engine = fixture.engine
         let wsId = fixture.workspaceId
@@ -6503,7 +6511,15 @@ private func makeCenteredCrossMonitorFixture(
             workingArea: fixture.area,
             animationTime: nil
         )
-        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == .left)
+        guard let partialFrame = partialRevealLayout.frames[leakingWindow.token] else {
+            Issue.record("Expected a partially revealed frame beside a neighboring left monitor")
+            return
+        }
+
+        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == nil)
+        #expect(partialFrame.minX < secondaryMonitor.visibleFrame.minX)
+        #expect(partialFrame.maxX > secondaryMonitor.visibleFrame.minX)
+        #expect(partialFrame.intersects(primaryMonitor.frame))
 
         var fullRevealState = hiddenState
         fullRevealState.viewOffsetPixels = .static(-(secondaryMonitor.visibleFrame.width + fixture.gap))
@@ -6677,7 +6693,7 @@ private func makeCenteredCrossMonitorFixture(
         #expect(partialFrame.maxX > monitor.visibleFrame.maxX)
     }
 
-    @Test func neighboringRightMonitorKeepsRenderOffsetRevealHiddenUntilFullyContained() {
+    @Test func neighboringRightMonitorAllowsRenderOffsetReveal() {
         let fixture = makeHorizontalNeighboringRevealFixture(
             workspaceOnPrimary: true,
             withAnimationClock: true,
@@ -6729,14 +6745,16 @@ private func makeCenteredCrossMonitorFixture(
             workingArea: fixture.area,
             animationTime: partialTime
         )
-        guard let hiddenPlacementFrame = partialLayout.frames[leakingWindow.token] else {
-            Issue.record("Expected hidden placement frame while neighboring monitor keeps render-offset reveal hidden")
+        guard let partialFrame = partialLayout.frames[leakingWindow.token] else {
+            Issue.record("Expected partially revealed frame from render offset beside a neighboring monitor")
             return
         }
 
         #expect(leakingColumn.renderOffset(at: partialTime).x < -8)
-        #expect(partialLayout.hiddenHandles[leakingWindow.token] == .right)
-        #expect(!hiddenPlacementFrame.intersects(secondaryMonitor.frame))
+        #expect(partialLayout.hiddenHandles[leakingWindow.token] == nil)
+        #expect(partialFrame.minX < primaryMonitor.visibleFrame.maxX)
+        #expect(partialFrame.maxX > primaryMonitor.visibleFrame.maxX)
+        #expect(partialFrame.intersects(secondaryMonitor.frame))
 
         leakingColumn.moveAnimation = nil
         leakingColumn.animateMoveFrom(
@@ -6769,7 +6787,7 @@ private func makeCenteredCrossMonitorFixture(
         #expect(!fullyContainedFrame.intersects(secondaryMonitor.frame))
     }
 
-    @Test func neighboringUpperMonitorKeepsPartiallyRevealedRowHiddenUntilFullyContained() {
+    @Test func neighboringUpperMonitorAllowsPartiallyRevealedRow() {
         let fixture = makeVerticalNeighboringRevealFixture(workspaceOnLowerMonitor: true, pidBase: 161)
         let engine = fixture.engine
         let wsId = fixture.workspaceId
@@ -6800,7 +6818,15 @@ private func makeCenteredCrossMonitorFixture(
             workingArea: fixture.area,
             animationTime: nil
         )
-        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == .right)
+        guard let partialFrame = partialRevealLayout.frames[leakingWindow.token] else {
+            Issue.record("Expected a partially revealed row beside a neighboring upper monitor")
+            return
+        }
+
+        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == nil)
+        #expect(partialFrame.minY < lowerMonitor.visibleFrame.maxY)
+        #expect(partialFrame.maxY > lowerMonitor.visibleFrame.maxY)
+        #expect(partialFrame.intersects(upperMonitor.frame))
 
         var fullRevealState = hiddenState
         fullRevealState.viewOffsetPixels = .static(lowerMonitor.visibleFrame.height + fixture.gap)
@@ -6823,7 +6849,7 @@ private func makeCenteredCrossMonitorFixture(
         #expect(!fullyContainedFrame.intersects(upperMonitor.frame))
     }
 
-    @Test func neighboringLowerMonitorKeepsPartiallyRevealedRowHiddenUntilFullyContained() {
+    @Test func neighboringLowerMonitorAllowsPartiallyRevealedRow() {
         let fixture = makeVerticalNeighboringRevealFixture(workspaceOnLowerMonitor: false, pidBase: 171)
         let engine = fixture.engine
         let wsId = fixture.workspaceId
@@ -6856,7 +6882,15 @@ private func makeCenteredCrossMonitorFixture(
             workingArea: fixture.area,
             animationTime: nil
         )
-        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == .left)
+        guard let partialFrame = partialRevealLayout.frames[leakingWindow.token] else {
+            Issue.record("Expected a partially revealed row beside a neighboring lower monitor")
+            return
+        }
+
+        #expect(partialRevealLayout.hiddenHandles[leakingWindow.token] == nil)
+        #expect(partialFrame.minY < upperMonitor.visibleFrame.minY)
+        #expect(partialFrame.maxY > upperMonitor.visibleFrame.minY)
+        #expect(partialFrame.intersects(lowerMonitor.frame))
 
         var fullRevealState = hiddenState
         fullRevealState.viewOffsetPixels = .static(-(upperMonitor.visibleFrame.height + fixture.gap))
@@ -6954,7 +6988,7 @@ private func makeCenteredCrossMonitorFixture(
         #expect(lowerPartialFrame.maxY > monitor.visibleFrame.minY)
     }
 
-    @Test func neighboringUpperMonitorKeepsAnimatedVerticalRevealHiddenUntilFullyContained() {
+    @Test func neighboringUpperMonitorAllowsAnimatedVerticalReveal() {
         let fixture = makeVerticalNeighboringRevealFixture(
             workspaceOnLowerMonitor: true,
             withAnimationClock: true,
@@ -7001,15 +7035,17 @@ private func makeCenteredCrossMonitorFixture(
             workingArea: fixture.area,
             animationTime: partialTime
         )
-        guard let hiddenPlacementFrame = partialLayout.frames[leakingWindow.token] else {
-            Issue.record("Expected hidden placement frame while upper monitor keeps animated vertical reveal hidden")
+        guard let partialFrame = partialLayout.frames[leakingWindow.token] else {
+            Issue.record("Expected partially revealed frame during animated vertical reveal")
             return
         }
 
         #expect(animatingState.viewOffsetPixels.value(at: partialTime) > 8)
         #expect(animatingState.viewOffsetPixels.value(at: partialTime) < revealTarget)
-        #expect(partialLayout.hiddenHandles[leakingWindow.token] == .right)
-        #expect(!hiddenPlacementFrame.intersects(upperMonitor.frame))
+        #expect(partialLayout.hiddenHandles[leakingWindow.token] == nil)
+        #expect(partialFrame.minY < lowerMonitor.visibleFrame.maxY)
+        #expect(partialFrame.maxY > lowerMonitor.visibleFrame.maxY)
+        #expect(partialFrame.intersects(upperMonitor.frame))
 
         var fullyContainedState = state
         fullyContainedState.viewOffsetPixels = .static(revealTarget)
