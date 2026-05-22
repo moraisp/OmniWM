@@ -141,6 +141,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         effectiveManageAction != .auto || effectiveLayoutAction != .auto ||
             assignToWorkspace != nil ||
             minWidth != nil || minHeight != nil ||
+            activationKey != nil ||
             hasAdvancedMatchers
     }
 

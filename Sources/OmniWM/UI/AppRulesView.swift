@@ -253,6 +253,15 @@ struct AppRuleDetailView: View {
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
+
+                LabeledContent("Hotkey Letter") {
+                    TextField("", text: $draft.activationKey)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 52)
+                        .onChange(of: draft.activationKey) { _, newValue in
+                            draft.activationKey = normalizedActivationKeyText(newValue)
+                        }
+                }
             }
 
             Section("Window Behavior") {
@@ -297,14 +306,6 @@ struct AppRuleDetailView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    LabeledContent("Hotkey Letter") {
-                        TextField("", text: $draft.activationKey)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 52)
-                            .onChange(of: draft.activationKey) { _, newValue in
-                                draft.activationKey = normalizedActivationKeyText(newValue)
-                            }
-                    }
                 }
 
                 Toggle("Minimum Height", isOn: $draft.minHeightEnabled)
