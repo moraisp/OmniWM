@@ -137,7 +137,8 @@ extension NiriLayoutEngine {
     /// Reconcile the authoritative full workspace-to-monitor assignment set
     /// during monitor sync and prune stale duplicate roots.
     func syncWorkspaceAssignments(
-        _ assignments: [(workspaceId: WorkspaceDescriptor.ID, monitor: Monitor)]
+        _ assignments: [(workspaceId: WorkspaceDescriptor.ID, monitor: Monitor)],
+        orientations: [Monitor.ID: Monitor.Orientation] = [:]
     ) {
         var desiredOwners: [WorkspaceDescriptor.ID: Monitor.ID] = [:]
         desiredOwners.reserveCapacity(assignments.count)
@@ -145,7 +146,8 @@ extension NiriLayoutEngine {
         for assignment in assignments {
             _ = ensureMonitor(
                 for: assignment.monitor.id,
-                monitor: assignment.monitor
+                monitor: assignment.monitor,
+                orientation: orientations[assignment.monitor.id]
             )
             desiredOwners[assignment.workspaceId] = assignment.monitor.id
         }
@@ -155,7 +157,8 @@ extension NiriLayoutEngine {
         for assignment in assignments where desiredOwners[assignment.workspaceId] == assignment.monitor.id {
             let targetMonitor = monitors[assignment.monitor.id] ?? ensureMonitor(
                 for: assignment.monitor.id,
-                monitor: assignment.monitor
+                monitor: assignment.monitor,
+                orientation: orientations[assignment.monitor.id]
             )
             attachWorkspaceRootIfNeeded(assignment.workspaceId, to: targetMonitor)
         }

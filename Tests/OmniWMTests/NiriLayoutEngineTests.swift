@@ -3669,6 +3669,26 @@ private func makeCenteredCrossMonitorFixture(
         }
     }
 
+    @Test func syncWorkspaceAssignmentsAppliesOrientationWhenCreatingMonitor() {
+        let engine = NiriLayoutEngine(maxWindowsPerColumn: 1)
+        let monitor = makeLayoutPlanTestMonitor(
+            displayId: 100,
+            name: "Portrait",
+            x: 0,
+            width: 900,
+            height: 1600
+        )
+        let workspaceId = UUID()
+
+        engine.syncWorkspaceAssignments(
+            [(workspaceId: workspaceId, monitor: monitor)],
+            orientations: [monitor.id: .horizontal]
+        )
+
+        #expect(engine.monitor(for: monitor.id)?.orientation == .horizontal)
+        #expect(engine.monitor(for: monitor.id)?.workspaceRoots[workspaceId] === engine.root(for: workspaceId))
+    }
+
     @Test @MainActor func syncMonitorsToNiriEngineRemovesStaleWorkspaceRootDuplicates() async {
         let primaryMonitor = makeLayoutPlanTestMonitor(displayId: 100, name: "Primary", x: 0, width: 1600, height: 900)
         let secondaryMonitor = makeLayoutPlanTestMonitor(

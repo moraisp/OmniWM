@@ -1358,14 +1358,19 @@ enum NiriWindowMoveResult {
         guard let controller, let engine = controller.niriEngine else { return }
 
         let currentMonitors = controller.workspaceManager.monitors
-        engine.updateMonitors(currentMonitors)
+        var orientations: [Monitor.ID: Monitor.Orientation] = [:]
+        orientations.reserveCapacity(currentMonitors.count)
+        for monitor in currentMonitors {
+            orientations[monitor.id] = controller.settings.effectiveOrientation(for: monitor)
+        }
+        engine.updateMonitors(currentMonitors, orientations: orientations)
 
         let workspaceAssignments: [(workspaceId: WorkspaceDescriptor.ID, monitor: Monitor)] =
             controller.workspaceManager.workspaces.compactMap { workspace in
                 guard let monitor = controller.workspaceManager.monitor(for: workspace.id) else { return nil }
                 return (workspaceId: workspace.id, monitor: monitor)
             }
-        engine.syncWorkspaceAssignments(workspaceAssignments)
+        engine.syncWorkspaceAssignments(workspaceAssignments, orientations: orientations)
 
         refreshResolvedMonitorSettings()
     }

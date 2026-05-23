@@ -18,14 +18,15 @@ private func makeLifecycleMonitor(
     x: CGFloat,
     y: CGFloat,
     width: CGFloat = 1920,
-    height: CGFloat = 1080
+    height: CGFloat = 1080,
+    visibleFrame: CGRect? = nil
 ) -> Monitor {
     let frame = CGRect(x: x, y: y, width: width, height: height)
     return Monitor(
         id: Monitor.ID(displayId: displayId),
         displayId: displayId,
         frame: frame,
-        visibleFrame: frame,
+        visibleFrame: visibleFrame ?? frame,
         hasNotch: false,
         name: name
     )
@@ -307,6 +308,90 @@ private func waitUntilServiceLifecycleTest(
         #expect(forcedTarget.id == newRight.id)
         #expect(controller.workspaceManager.activeWorkspace(on: forcedTarget.id)?.id == ws3)
         #expect(controller.workspaceManager.activeWorkspace(on: newLeft.id)?.id != ws3)
+    }
+
+    @Test @MainActor func monitorConfigurationChangePreservesNiriOrientationOverride() async {
+        let defaults = makeLifecycleTestDefaults()
+        let settings = SettingsStore(defaults: defaults)
+        settings.workspaceConfigurations = [
+            WorkspaceConfiguration(name: "1", monitorAssignment: .main)
+        ]
+
+        let monitor = makeLifecycleMonitor(
+            displayId: 100,
+            name: "Side",
+            x: 0,
+            y: 0,
+            width: 900,
+            height: 1600
+        )
+        settings.updateOrientationSettings(
+            MonitorOrientationSettings(
+                monitorName: monitor.name,
+                monitorDisplayId: monitor.displayId,
+                orientation: .horizontal
+            )
+        )
+
+        let controller = WMController(settings: settings)
+        let lifecycleManager = ServiceLifecycleManager(controller: controller)
+        controller.workspaceManager.applyMonitorConfigurationChange([monitor])
+        controller.enableNiriLayout()
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        #expect(controller.niriEngine?.monitor(for: monitor.id)?.orientation == .horizontal)
+
+        let reconfiguredMonitor = makeLifecycleMonitor(
+            displayId: monitor.displayId,
+            name: monitor.name,
+            x: monitor.frame.minX,
+            y: monitor.frame.minY,
+            width: monitor.frame.width,
+            height: monitor.frame.height,
+            visibleFrame: CGRect(x: 0, y: 32, width: 900, height: 1568)
+        )
+
+        lifecycleManager.applyMonitorConfigurationChanged(currentMonitors: [reconfiguredMonitor])
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        #expect(controller.niriEngine?.monitor(for: monitor.id)?.orientation == .horizontal)
+    }
+
+    @Test @MainActor func monitorConfigurationChangeKeepsAutoNiriOrientationCurrent() async {
+        let defaults = makeLifecycleTestDefaults()
+        let settings = SettingsStore(defaults: defaults)
+        settings.workspaceConfigurations = [
+            WorkspaceConfiguration(name: "1", monitorAssignment: .main)
+        ]
+
+        let landscapeMonitor = makeLifecycleMonitor(
+            displayId: 100,
+            name: "Auto",
+            x: 0,
+            y: 0,
+            width: 1600,
+            height: 900
+        )
+        let controller = WMController(settings: settings)
+        let lifecycleManager = ServiceLifecycleManager(controller: controller)
+        controller.workspaceManager.applyMonitorConfigurationChange([landscapeMonitor])
+        controller.enableNiriLayout()
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        #expect(controller.niriEngine?.monitor(for: landscapeMonitor.id)?.orientation == .horizontal)
+
+        let portraitMonitor = makeLifecycleMonitor(
+            displayId: landscapeMonitor.displayId,
+            name: landscapeMonitor.name,
+            x: landscapeMonitor.frame.minX,
+            y: landscapeMonitor.frame.minY,
+            width: 900,
+            height: 1600
+        )
+        lifecycleManager.applyMonitorConfigurationChanged(currentMonitors: [portraitMonitor])
+        await controller.layoutRefreshController.waitForRefreshWorkForTests()
+
+        #expect(controller.niriEngine?.monitor(for: landscapeMonitor.id)?.orientation == .vertical)
     }
 
     @Test @MainActor func appTerminationClearsFocusMemoryAndDeadHandlesDoNotReturn() {
