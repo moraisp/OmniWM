@@ -8284,7 +8284,10 @@ private func makeCenteredCrossMonitorFixture(
         let midToggleState = controller.workspaceManager.niriViewportState(for: workspaceId)
         #expect(midToggleState.viewOffsetPixels.isAnimating)
 
-        controller.layoutRefreshController.settleAllAnimationsForTests()
+        controller.niriLayoutHandler.tickScrollAnimation(
+            targetTime: controller.animationClock.now() + 10.0,
+            displayId: monitor.displayId
+        )
 
         let settledState = controller.workspaceManager.niriViewportState(for: workspaceId)
         #expect(!settledState.viewOffsetPixels.isAnimating)

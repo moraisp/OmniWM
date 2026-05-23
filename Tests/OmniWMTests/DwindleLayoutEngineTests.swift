@@ -702,6 +702,7 @@ private func configureWorkspacesAsDwindle(
 
         configureWorkspaceAsDwindle(on: controller, workspaceId: workspaceId)
         controller.enableDwindleLayout()
+        controller.dwindleEngine?.windowMovementAnimationConfig = CubicConfig(duration: 10.0)
         controller.setBordersEnabled(true)
         await waitForLayoutPlanRefreshWork(on: controller)
 
