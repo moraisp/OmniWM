@@ -134,20 +134,46 @@ extension NiriLayoutEngine {
         attachWorkspaceRootIfNeeded(workspaceId, to: targetMonitor)
     }
 
-    func scaleWorkspaceWidthState(_ workspaceId: WorkspaceDescriptor.ID, by ratio: CGFloat) {
-        guard ratio.isFinite, ratio > 0, abs(ratio - 1) > 0.001 else { return }
+    func scaleWorkspaceSizeState(
+        _ workspaceId: WorkspaceDescriptor.ID,
+        widthRatio: CGFloat,
+        heightRatio: CGFloat
+    ) {
+        let shouldScaleWidth = widthRatio.isFinite && widthRatio > 0 && abs(widthRatio - 1) > 0.001
+        let shouldScaleHeight = heightRatio.isFinite && heightRatio > 0 && abs(heightRatio - 1) > 0.001
+        guard shouldScaleWidth || shouldScaleHeight else { return }
 
         for column in columns(in: workspaceId) {
-            column.width = scaled(column.width, by: ratio)
-            column.savedWidth = column.savedWidth.map { scaled($0, by: ratio) }
-            column.cachedWidth = scaled(column.cachedWidth, by: ratio)
-            column.targetWidth = column.targetWidth.map { scaled($0, by: ratio) }
+            if shouldScaleWidth {
+                column.width = scaled(column.width, by: widthRatio)
+                column.savedWidth = column.savedWidth.map { scaled($0, by: widthRatio) }
+                column.cachedWidth = scaled(column.cachedWidth, by: widthRatio)
+                column.targetWidth = column.targetWidth.map { scaled($0, by: widthRatio) }
+            }
+
+            if shouldScaleHeight {
+                column.height = scaled(column.height, by: heightRatio)
+                column.savedHeight = column.savedHeight.map { scaled($0, by: heightRatio) }
+                column.cachedHeight = scaled(column.cachedHeight, by: heightRatio)
+            }
 
             for window in column.windowNodes {
-                window.windowWidth = scaled(window.windowWidth, by: ratio)
-                window.resolvedWidth = window.resolvedWidth.map { scaled($0, by: ratio) }
+                if shouldScaleWidth {
+                    window.windowWidth = scaled(window.windowWidth, by: widthRatio)
+                    window.resolvedWidth = window.resolvedWidth.map { scaled($0, by: widthRatio) }
+                }
+
+                if shouldScaleHeight {
+                    window.height = scaled(window.height, by: heightRatio)
+                    window.savedHeight = window.savedHeight.map { scaled($0, by: heightRatio) }
+                    window.resolvedHeight = window.resolvedHeight.map { scaled($0, by: heightRatio) }
+                }
             }
         }
+    }
+
+    func scaleWorkspaceWidthState(_ workspaceId: WorkspaceDescriptor.ID, by ratio: CGFloat) {
+        scaleWorkspaceSizeState(workspaceId, widthRatio: ratio, heightRatio: 1)
     }
 
     /// Reconcile the authoritative full workspace-to-monitor assignment set

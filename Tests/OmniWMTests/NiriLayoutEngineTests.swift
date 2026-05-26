@@ -138,6 +138,47 @@ private func hasShowVisibilityChange(
     }
 }
 
+@Test func scaleWorkspaceSizeStateScalesFixedWindowHeightAcrossMonitorSizes() {
+    let engine = NiriLayoutEngine(maxWindowsPerColumn: 1)
+    let workspaceId = WorkspaceDescriptor.ID()
+    let root = engine.ensureRoot(for: workspaceId)
+
+    let column = NiriContainer()
+    column.width = .fixed(900)
+    column.savedWidth = .fixed(700)
+    column.cachedWidth = 900
+    column.targetWidth = 920
+    column.height = .fixed(560)
+    column.savedHeight = .fixed(540)
+    column.cachedHeight = 560
+
+    let token = WindowToken(pid: 1, windowId: 10_101)
+    let window = NiriWindow(token: token)
+    window.windowWidth = .fixed(880)
+    window.resolvedWidth = 880
+    window.height = .fixed(520)
+    window.savedHeight = .fixed(500)
+    window.resolvedHeight = 520
+
+    column.appendChild(window)
+    root.appendChild(column)
+
+    engine.scaleWorkspaceSizeState(workspaceId, widthRatio: 1.5, heightRatio: 1.25)
+
+    #expect(column.width == .fixed(1350))
+    #expect(column.savedWidth == .fixed(1050))
+    #expect(column.cachedWidth == 1350)
+    #expect(column.targetWidth == 1380)
+    #expect(column.height == .fixed(700))
+    #expect(column.savedHeight == .fixed(675))
+    #expect(column.cachedHeight == 700)
+    #expect(window.windowWidth == .fixed(1320))
+    #expect(window.resolvedWidth == 1320)
+    #expect(window.height == .fixed(650))
+    #expect(window.savedHeight == .fixed(625))
+    #expect(window.resolvedHeight == 650)
+}
+
 private func hasAnyVisibilityChange(
     _ changes: [LayoutVisibilityChange],
     token: WindowToken

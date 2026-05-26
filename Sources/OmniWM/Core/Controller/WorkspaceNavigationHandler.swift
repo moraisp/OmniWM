@@ -222,13 +222,24 @@ final class WorkspaceNavigationHandler {
         guard let controller else { return }
         let sourceWidth = controller.insetWorkingFrame(from: sourceMonitor.visibleFrame).width
         let targetWidth = controller.insetWorkingFrame(from: targetMonitor.visibleFrame).width
-        guard sourceWidth.isFinite, sourceWidth > 0, targetWidth.isFinite, targetWidth > 0 else { return }
+        let sourceHeight = controller.insetWorkingFrame(from: sourceMonitor.visibleFrame).height
+        let targetHeight = controller.insetWorkingFrame(from: targetMonitor.visibleFrame).height
+        guard sourceWidth.isFinite, sourceWidth > 0,
+              targetWidth.isFinite, targetWidth > 0,
+              sourceHeight.isFinite, sourceHeight > 0,
+              targetHeight.isFinite, targetHeight > 0
+        else { return }
 
-        let ratio = targetWidth / sourceWidth
-        controller.niriEngine?.scaleWorkspaceWidthState(workspaceId, by: ratio)
+        let widthRatio = targetWidth / sourceWidth
+        let heightRatio = targetHeight / sourceHeight
+        controller.niriEngine?.scaleWorkspaceSizeState(
+            workspaceId,
+            widthRatio: widthRatio,
+            heightRatio: heightRatio
+        )
         controller.workspaceManager.withNiriViewportState(for: workspaceId) { state in
-            state.viewOffsetPixels = .static(state.viewOffsetPixels.target() * ratio)
-            state.viewOffsetToRestore = state.viewOffsetToRestore.map { $0 * ratio }
+            state.viewOffsetPixels = .static(state.viewOffsetPixels.target() * widthRatio)
+            state.viewOffsetToRestore = state.viewOffsetToRestore.map { $0 * widthRatio }
         }
     }
 
