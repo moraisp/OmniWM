@@ -1349,6 +1349,7 @@ final class AXEventHandler: CGSEventDelegate {
         let activeRequest = controller.focusBridge.activeManagedRequest(for: entry.pid)
         let shouldConfirmRequest = confirmRequest ?? true
         var confirmedRequestId: UInt64?
+        var confirmedRequest: ManagedFocusRequest?
 
         if shouldConfirmRequest {
             _ = controller.workspaceManager.confirmManagedFocus(
@@ -1362,7 +1363,7 @@ final class AXEventHandler: CGSEventDelegate {
             if let activeRequest {
                 confirmedRequestId = activeRequest.requestId
                 if activeRequest.token == entry.token {
-                    _ = controller.focusBridge.confirmManagedRequest(
+                    confirmedRequest = controller.focusBridge.confirmManagedRequest(
                         token: entry.token,
                         source: source
                     )
@@ -1439,6 +1440,7 @@ final class AXEventHandler: CGSEventDelegate {
         }
         if shouldConfirmRequest,
            controller.moveMouseToFocusedWindowEnabled,
+           confirmedRequest?.moveMouseOnConfirm ?? true,
            controller.workspaceManager.focusedToken == entry.token,
            !controller.workspaceManager.isNonManagedFocusActive
         {

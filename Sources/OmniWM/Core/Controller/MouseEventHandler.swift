@@ -1164,11 +1164,11 @@ final class MouseEventHandler {
                     window,
                     in: workspaceId,
                     state: &vstate,
-                    options: .init(ensureVisible: false, startAnimation: false)
+                    options: .init(ensureVisible: false, startAnimation: false, moveMouseOnFocus: false)
                 )
             }
         case let .dwindle(workspaceId, token):
-            controller.dwindleLayoutHandler.activateWindow(token, in: workspaceId)
+            controller.dwindleLayoutHandler.activateWindow(token, in: workspaceId, moveMouseOnFocus: false)
         }
     }
 

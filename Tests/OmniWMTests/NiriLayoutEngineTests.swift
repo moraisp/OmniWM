@@ -3454,6 +3454,7 @@ private func makeCenteredCrossMonitorFixture(
                 return
             }
 
+            fixture.controller.focusWindow(fixture.topToken, moveMouseOnConfirm: true)
             fixture.controller.axEventHandler.handleManagedAppActivation(
                 entry: topEntry,
                 isWorkspaceActive: true,
@@ -3464,6 +3465,51 @@ private func makeCenteredCrossMonitorFixture(
 
             #expect(fixture.controller.workspaceManager.focusedToken == fixture.topToken)
             #expect(warpedPoints == [ScreenCoordinateSpace.toWindowServer(point: topFrame.center)])
+        }
+    }
+
+    @Test @MainActor func moveMouseToFocusedWindowHonorsFocusWithoutWarpRequest() async {
+        await withAXFrameProviderIsolationForTests {
+            let fixture = await makeSingleColumnFocusFixture(displayMode: .normal)
+            guard let screen = NSScreen.screens.first else {
+                Issue.record("Expected at least one screen for focus confirmation cursor warp test")
+                return
+            }
+
+            let topFrame = CGRect(
+                x: screen.frame.midX - 120,
+                y: screen.frame.midY - 80,
+                width: 240,
+                height: 160
+            )
+            fixture.topWindow.frame = topFrame
+            fixture.controller.setMoveMouseToFocusedWindow(true)
+            var warpedPoints: [CGPoint] = []
+            fixture.controller.warpMouseCursorPosition = { point in
+                warpedPoints.append(point)
+            }
+
+            AXWindowService.fastFrameProviderForTests = { axRef in
+                axRef.windowId == fixture.topToken.windowId ? topFrame : nil
+            }
+            defer { AXWindowService.fastFrameProviderForTests = nil }
+
+            guard let topEntry = fixture.controller.workspaceManager.entry(for: fixture.topToken) else {
+                Issue.record("Expected top stacked Niri window entry")
+                return
+            }
+
+            fixture.controller.focusWindow(fixture.topToken, moveMouseOnConfirm: false)
+            fixture.controller.axEventHandler.handleManagedAppActivation(
+                entry: topEntry,
+                isWorkspaceActive: true,
+                appFullscreen: false,
+                source: .focusedWindowChanged,
+                confirmRequest: true
+            )
+
+            #expect(fixture.controller.workspaceManager.focusedToken == fixture.topToken)
+            #expect(warpedPoints.isEmpty)
         }
     }
 

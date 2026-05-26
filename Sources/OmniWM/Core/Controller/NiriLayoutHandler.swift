@@ -1472,7 +1472,7 @@ enum NiriWindowMoveResult {
                 reason: .layoutCommand
             ) { [weak controller] in
                 if let focusToken {
-                    controller?.focusWindow(focusToken)
+                    controller?.focusWindow(focusToken, moveMouseOnConfirm: options.moveMouseOnFocus)
                 }
             }
             if options.startAnimation, state.viewOffsetPixels.isAnimating {
@@ -1480,7 +1480,7 @@ enum NiriWindowMoveResult {
             }
         } else {
             if options.axFocus, let windowNode = node as? NiriWindow {
-                controller.focusWindow(windowNode.token)
+                controller.focusWindow(windowNode.token, moveMouseOnConfirm: options.moveMouseOnFocus)
             }
             if options.startAnimation, state.viewOffsetPixels.isAnimating {
                 controller.layoutRefreshController.startScrollAnimation(for: workspaceId)
@@ -1814,6 +1814,7 @@ struct NodeActivationOptions {
     var layoutRefresh: Bool = true
     var axFocus: Bool = true
     var startAnimation: Bool = true
+    var moveMouseOnFocus: Bool = true
 }
 
 @MainActor struct NiriOperationContext {

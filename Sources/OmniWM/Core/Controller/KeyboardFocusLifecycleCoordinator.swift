@@ -35,6 +35,7 @@ struct ManagedFocusRequest: Equatable {
     var retryCount: Int = 0
     var lastActivationSource: ActivationEventSource?
     var status: Status = .pending
+    var moveMouseOnConfirm: Bool = false
 }
 
 @MainActor
@@ -48,19 +49,27 @@ final class FocusBridgeCoordinator {
 
     func beginManagedRequest(
         token: WindowToken,
-        workspaceId: WorkspaceDescriptor.ID
+        workspaceId: WorkspaceDescriptor.ID,
+        moveMouseOnConfirm: Bool = false
     ) -> ManagedFocusRequest {
         if let activeManagedRequest,
            activeManagedRequest.token == token,
            activeManagedRequest.workspaceId == workspaceId
         {
+            if moveMouseOnConfirm, !activeManagedRequest.moveMouseOnConfirm {
+                var updatedRequest = activeManagedRequest
+                updatedRequest.moveMouseOnConfirm = true
+                self.activeManagedRequest = updatedRequest
+                return updatedRequest
+            }
             return activeManagedRequest
         }
 
         let request = ManagedFocusRequest(
             requestId: nextRequestId,
             token: token,
-            workspaceId: workspaceId
+            workspaceId: workspaceId,
+            moveMouseOnConfirm: moveMouseOnConfirm
         )
         nextRequestId += 1
         activeManagedRequest = request

@@ -153,7 +153,7 @@ import QuartzCore
         }
     }
 
-    func activateWindow(_ token: WindowToken, in workspaceId: WorkspaceDescriptor.ID) {
+    func activateWindow(_ token: WindowToken, in workspaceId: WorkspaceDescriptor.ID, moveMouseOnFocus: Bool = true) {
         guard let controller,
               let engine = controller.dwindleEngine,
               controller.workspaceManager.entry(for: token)?.workspaceId == workspaceId,
@@ -174,7 +174,7 @@ import QuartzCore
         controller.layoutRefreshController.requestImmediateRelayout(
             reason: .layoutCommand
         ) { [weak controller] in
-            controller?.focusWindow(token)
+            controller?.focusWindow(token, moveMouseOnConfirm: moveMouseOnFocus)
         }
     }
 

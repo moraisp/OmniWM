@@ -2906,7 +2906,7 @@ extension WMController {
         }
     }
 
-    func focusWindow(_ token: WindowToken) {
+    func focusWindow(_ token: WindowToken, moveMouseOnConfirm: Bool = true) {
         guard let entry = workspaceManager.entry(for: token) else { return }
         guard !isLockScreenActive else { return }
         if hasStartedServices {
@@ -2928,7 +2928,8 @@ extension WMController {
         )
         let request = focusBridge.beginManagedRequest(
             token: token,
-            workspaceId: entry.workspaceId
+            workspaceId: entry.workspaceId,
+            moveMouseOnConfirm: moveMouseOnConfirm
         )
         recordNiriCreateFocusTrace(
             .pendingFocusStarted(
@@ -2953,7 +2954,7 @@ extension WMController {
             },
             onDeferredFocus: { [weak self] deferred in
                 guard let self, self.workspaceManager.entry(for: deferred) != nil else { return }
-                self.focusWindow(deferred)
+                self.focusWindow(deferred, moveMouseOnConfirm: moveMouseOnConfirm)
             }
         )
     }
