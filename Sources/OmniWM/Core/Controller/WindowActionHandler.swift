@@ -647,7 +647,7 @@ final class WindowActionHandler {
         let bundleId = rule.bundleId
         let entries = appEntries(bundleId: bundleId)
         guard !entries.isEmpty else {
-            return launchApp(bundleId: bundleId, newInstance: false)
+            return launchApp(rule: rule, newInstance: false)
         }
 
         let target = rotatedEntry(in: entries, bundleId: bundleId)
@@ -661,7 +661,7 @@ final class WindowActionHandler {
     @discardableResult
     func openNewAppInstance(ruleId: UUID) -> ExternalCommandResult {
         guard let rule = appRule(id: ruleId) else { return .notFound }
-        return launchApp(bundleId: rule.bundleId, newInstance: true)
+        return launchApp(rule: rule, newInstance: true)
     }
 
     @discardableResult
@@ -670,7 +670,7 @@ final class WindowActionHandler {
         let bundleId = rule.bundleId
         let entries = appEntries(bundleId: bundleId)
         guard !entries.isEmpty else {
-            return launchApp(bundleId: bundleId, newInstance: false)
+            return launchApp(rule: rule, newInstance: false)
         }
 
         let target = rotatedEntry(in: entries, bundleId: bundleId)
@@ -726,7 +726,14 @@ final class WindowActionHandler {
         return entries[(currentIndex + 1) % entries.count]
     }
 
-    private func launchApp(bundleId: String, newInstance: Bool) -> ExternalCommandResult {
+    private func launchApp(rule: AppRule, newInstance: Bool) -> ExternalCommandResult {
+        if let launchCommand = rule.launchCommand,
+           runLaunchCommand(launchCommand)
+        {
+            return .executed
+        }
+
+        let bundleId = rule.bundleId
         let normalizedBundleId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedBundleId.isEmpty else { return .notFound }
 
@@ -748,6 +755,19 @@ final class WindowActionHandler {
             return .executed
         } catch {
             return .notFound
+        }
+    }
+
+    private func runLaunchCommand(_ command: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+
+        do {
+            try process.run()
+            return true
+        } catch {
+            return false
         }
     }
 }

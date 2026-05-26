@@ -31,6 +31,7 @@ struct AppRuleDraft: Identifiable, Equatable {
     var minHeightEnabled: Bool
     var minHeight: Double
     var activationKey: String
+    var launchCommand: String
     var appNameMatcherEnabled: Bool
     var appNameSubstring: String
     var titleMatcherMode: TitleMatcherMode
@@ -53,6 +54,7 @@ struct AppRuleDraft: Identifiable, Equatable {
         minHeightEnabled = false
         minHeight = 300
         activationKey = ""
+        launchCommand = ""
         appNameMatcherEnabled = false
         appNameSubstring = ""
         titleMatcherMode = .none
@@ -76,6 +78,7 @@ struct AppRuleDraft: Identifiable, Equatable {
         minHeightEnabled = rule.minHeight != nil
         minHeight = rule.minHeight ?? 300
         activationKey = rule.activationKey ?? ""
+        launchCommand = rule.launchCommand ?? ""
         appNameMatcherEnabled = rule.appNameSubstring?.isEmpty == false
         appNameSubstring = rule.appNameSubstring ?? ""
         if rule.titleRegex?.isEmpty == false {
@@ -135,7 +138,8 @@ struct AppRuleDraft: Identifiable, Equatable {
             assignToWorkspace: assignToWorkspaceEnabled ? assignToWorkspace.trimmedNonEmpty : nil,
             minWidth: minWidthEnabled ? minWidth : nil,
             minHeight: minHeightEnabled ? minHeight : nil,
-            activationKey: AppRule.normalizedActivationKey(activationKey)
+            activationKey: AppRule.normalizedActivationKey(activationKey),
+            launchCommand: AppRule.normalizedLaunchCommand(launchCommand)
         )
     }
 }

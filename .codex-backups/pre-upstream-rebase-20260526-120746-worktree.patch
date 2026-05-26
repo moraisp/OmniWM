@@ -1,0 +1,290 @@
+diff --git a/Sources/OmniWM/Core/Config/AppRule.swift b/Sources/OmniWM/Core/Config/AppRule.swift
+index 5b6e72f..b7a9928 100644
+--- a/Sources/OmniWM/Core/Config/AppRule.swift
++++ b/Sources/OmniWM/Core/Config/AppRule.swift
+@@ -54,6 +54,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         case minWidth
+         case minHeight
+         case activationKey
++        case launchCommand
+     }
+ 
+     let id: UUID
+@@ -70,6 +71,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+     var minWidth: Double?
+     var minHeight: Double?
+     var activationKey: String?
++    var launchCommand: String?
+ 
+     init(
+         id: UUID = UUID(),
+@@ -85,7 +87,8 @@ struct AppRule: Codable, Identifiable, Equatable {
+         assignToWorkspace: String? = nil,
+         minWidth: Double? = nil,
+         minHeight: Double? = nil,
+-        activationKey: String? = nil
++        activationKey: String? = nil,
++        launchCommand: String? = nil
+     ) {
+         self.id = id
+         self.bundleId = bundleId
+@@ -101,6 +104,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         self.minWidth = minWidth
+         self.minHeight = minHeight
+         self.activationKey = Self.normalizedActivationKey(activationKey)
++        self.launchCommand = Self.normalizedLaunchCommand(launchCommand)
+         normalizeLegacyManageOff()
+     }
+ 
+@@ -142,6 +146,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+             assignToWorkspace != nil ||
+             minWidth != nil || minHeight != nil ||
+             activationKey != nil ||
++            launchCommand != nil ||
+             hasAdvancedMatchers
+     }
+ 
+@@ -161,6 +166,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         minWidth = try container.decodeIfPresent(Double.self, forKey: .minWidth)
+         minHeight = try container.decodeIfPresent(Double.self, forKey: .minHeight)
+         activationKey = Self.normalizedActivationKey(try container.decodeIfPresent(String.self, forKey: .activationKey))
++        launchCommand = Self.normalizedLaunchCommand(try container.decodeIfPresent(String.self, forKey: .launchCommand))
+         normalizeLegacyManageOff()
+     }
+ 
+@@ -180,6 +186,7 @@ struct AppRule: Codable, Identifiable, Equatable {
+         try container.encodeIfPresent(minWidth, forKey: .minWidth)
+         try container.encodeIfPresent(minHeight, forKey: .minHeight)
+         try container.encodeIfPresent(activationKey, forKey: .activationKey)
++        try container.encodeIfPresent(launchCommand, forKey: .launchCommand)
+     }
+ 
+     private mutating func normalizeLegacyManageOff() {
+@@ -196,4 +203,10 @@ struct AppRule: Codable, Identifiable, Equatable {
+         guard uppercased.range(of: #"^[A-Z]$"#, options: .regularExpression) != nil else { return nil }
+         return uppercased
+     }
++
++    static func normalizedLaunchCommand(_ value: String?) -> String? {
++        guard let value else { return nil }
++        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
++        return trimmed.isEmpty ? nil : trimmed
++    }
+ }
+diff --git a/Sources/OmniWM/Core/Controller/WMController.swift b/Sources/OmniWM/Core/Controller/WMController.swift
+index 18defd9..645befb 100644
+--- a/Sources/OmniWM/Core/Controller/WMController.swift
++++ b/Sources/OmniWM/Core/Controller/WMController.swift
+@@ -196,6 +196,8 @@ final class WMController {
+     let animationClock = AnimationClock()
+     let motionPolicy: MotionPolicy
+     private let windowFocusOperations: WindowFocusOperations
++    @ObservationIgnored
++    var warpMouseCursor: (CGPoint) -> Void = { CGWarpMouseCursorPosition($0) }
+     weak var statusBarController: StatusBarController?
+ 
+     init(
+@@ -2658,7 +2660,7 @@ final class WMController {
+ 
+         guard NSScreen.screens.contains(where: { $0.frame.contains(center) }) else { return }
+ 
+-        CGWarpMouseCursorPosition(center)
++        warpMouseCursor(ScreenCoordinateSpace.toWindowServer(point: center))
+     }
+ 
+     func runningAppsWithWindows() -> [RunningAppInfo] {
+diff --git a/Sources/OmniWM/Core/Controller/WindowActionHandler.swift b/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
+index 6fe4155..79a7b30 100644
+--- a/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
++++ b/Sources/OmniWM/Core/Controller/WindowActionHandler.swift
+@@ -647,7 +647,7 @@ final class WindowActionHandler {
+         let bundleId = rule.bundleId
+         let entries = appEntries(bundleId: bundleId)
+         guard !entries.isEmpty else {
+-            return launchApp(bundleId: bundleId, newInstance: false)
++            return launchApp(rule: rule, newInstance: false)
+         }
+ 
+         let target = rotatedEntry(in: entries, bundleId: bundleId)
+@@ -661,7 +661,7 @@ final class WindowActionHandler {
+     @discardableResult
+     func openNewAppInstance(ruleId: UUID) -> ExternalCommandResult {
+         guard let rule = appRule(id: ruleId) else { return .notFound }
+-        return launchApp(bundleId: rule.bundleId, newInstance: true)
++        return launchApp(rule: rule, newInstance: true)
+     }
+ 
+     @discardableResult
+@@ -670,7 +670,7 @@ final class WindowActionHandler {
+         let bundleId = rule.bundleId
+         let entries = appEntries(bundleId: bundleId)
+         guard !entries.isEmpty else {
+-            return launchApp(bundleId: bundleId, newInstance: false)
++            return launchApp(rule: rule, newInstance: false)
+         }
+ 
+         let target = rotatedEntry(in: entries, bundleId: bundleId)
+@@ -726,7 +726,14 @@ final class WindowActionHandler {
+         return entries[(currentIndex + 1) % entries.count]
+     }
+ 
+-    private func launchApp(bundleId: String, newInstance: Bool) -> ExternalCommandResult {
++    private func launchApp(rule: AppRule, newInstance: Bool) -> ExternalCommandResult {
++        if let launchCommand = rule.launchCommand,
++           runLaunchCommand(launchCommand)
++        {
++            return .executed
++        }
++
++        let bundleId = rule.bundleId
+         let normalizedBundleId = bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+         guard !normalizedBundleId.isEmpty else { return .notFound }
+ 
+@@ -750,4 +757,17 @@ final class WindowActionHandler {
+             return .notFound
+         }
+     }
++
++    private func runLaunchCommand(_ command: String) -> Bool {
++        let process = Process()
++        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
++        process.arguments = ["-lc", command]
++
++        do {
++            try process.run()
++            return true
++        } catch {
++            return false
++        }
++    }
+ }
+diff --git a/Sources/OmniWM/UI/AppRuleDraft.swift b/Sources/OmniWM/UI/AppRuleDraft.swift
+index 4a5f112..a10d0a1 100644
+--- a/Sources/OmniWM/UI/AppRuleDraft.swift
++++ b/Sources/OmniWM/UI/AppRuleDraft.swift
+@@ -31,6 +31,7 @@ struct AppRuleDraft: Identifiable, Equatable {
+     var minHeightEnabled: Bool
+     var minHeight: Double
+     var activationKey: String
++    var launchCommand: String
+     var appNameMatcherEnabled: Bool
+     var appNameSubstring: String
+     var titleMatcherMode: TitleMatcherMode
+@@ -53,6 +54,7 @@ struct AppRuleDraft: Identifiable, Equatable {
+         minHeightEnabled = false
+         minHeight = 300
+         activationKey = ""
++        launchCommand = ""
+         appNameMatcherEnabled = false
+         appNameSubstring = ""
+         titleMatcherMode = .none
+@@ -76,6 +78,7 @@ struct AppRuleDraft: Identifiable, Equatable {
+         minHeightEnabled = rule.minHeight != nil
+         minHeight = rule.minHeight ?? 300
+         activationKey = rule.activationKey ?? ""
++        launchCommand = rule.launchCommand ?? ""
+         appNameMatcherEnabled = rule.appNameSubstring?.isEmpty == false
+         appNameSubstring = rule.appNameSubstring ?? ""
+         if rule.titleRegex?.isEmpty == false {
+@@ -135,7 +138,8 @@ struct AppRuleDraft: Identifiable, Equatable {
+             assignToWorkspace: assignToWorkspaceEnabled ? assignToWorkspace.trimmedNonEmpty : nil,
+             minWidth: minWidthEnabled ? minWidth : nil,
+             minHeight: minHeightEnabled ? minHeight : nil,
+-            activationKey: AppRule.normalizedActivationKey(activationKey)
++            activationKey: AppRule.normalizedActivationKey(activationKey),
++            launchCommand: AppRule.normalizedLaunchCommand(launchCommand)
+         )
+     }
+ }
+diff --git a/Sources/OmniWM/UI/AppRulesView.swift b/Sources/OmniWM/UI/AppRulesView.swift
+index 2a4fa23..a30b966 100644
+--- a/Sources/OmniWM/UI/AppRulesView.swift
++++ b/Sources/OmniWM/UI/AppRulesView.swift
+@@ -262,6 +262,15 @@ struct AppRuleDetailView: View {
+                             draft.activationKey = normalizedActivationKeyText(newValue)
+                         }
+                 }
++
++                LabeledContent("Launch Command") {
++                    TextField(
++                        "env -u ELECTRON_RUN_AS_NODE open -b \(draft.bundleId)",
++                        text: $draft.launchCommand
++                    )
++                    .textFieldStyle(.roundedBorder)
++                    .font(.system(.body, design: .monospaced))
++                }
+             }
+ 
+             Section("Window Behavior") {
+@@ -477,6 +486,15 @@ struct AppRuleAddSheet: View {
+                                 draft.activationKey = normalizedActivationKeyText(newValue)
+                             }
+                     }
++
++                    LabeledContent("Launch Command") {
++                        TextField(
++                            "env -u ELECTRON_RUN_AS_NODE open -b \(draft.bundleId)",
++                            text: $draft.launchCommand
++                        )
++                        .textFieldStyle(.roundedBorder)
++                        .font(.system(.body, design: .monospaced))
++                    }
+                 }
+ 
+                 Section("Window Behavior") {
+diff --git a/Tests/OmniWMTests/SettingsTOMLCodecTests.swift b/Tests/OmniWMTests/SettingsTOMLCodecTests.swift
+index 13ec99c..488083c 100644
+--- a/Tests/OmniWMTests/SettingsTOMLCodecTests.swift
++++ b/Tests/OmniWMTests/SettingsTOMLCodecTests.swift
+@@ -320,7 +320,9 @@ private extension String {
+                 layout: .tile,
+                 assignToWorkspace: "1",
+                 minWidth: 400,
+-                minHeight: 300
++                minHeight: 300,
++                activationKey: "C",
++                launchCommand: "env -u ELECTRON_RUN_AS_NODE open -b com.example.full"
+             ),
+             AppRule(
+                 id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+diff --git a/Tests/OmniWMTests/WMControllerFocusTests.swift b/Tests/OmniWMTests/WMControllerFocusTests.swift
+index f3e8f64..428cf20 100644
+--- a/Tests/OmniWMTests/WMControllerFocusTests.swift
++++ b/Tests/OmniWMTests/WMControllerFocusTests.swift
+@@ -213,6 +213,36 @@ private func waitForFocusRefresh(on controller: WMController) async {
+ }
+ 
+ @Suite(.serialized) struct WMControllerFocusTests {
++    @Test @MainActor func moveMouseToWindowWarpsUsingWindowServerCoordinates() {
++        let operations = WindowFocusOperations(
++            activateApp: { _ in },
++            focusSpecificWindow: { _, _, _ in },
++            raiseWindow: { _ in }
++        )
++        let fixture = makeFocusTestController(windowFocusOperations: operations)
++        guard let screen = NSScreen.screens.first else {
++            Issue.record("Expected at least one screen for cursor warp coordinate test")
++            return
++        }
++        let frame = screen.frame.insetBy(dx: 80, dy: 80)
++        let expectedPoint = ScreenCoordinateSpace.toWindowServer(point: frame.center)
++        var warpedPoints: [CGPoint] = []
++
++        let previousFastFrameProvider = AXWindowService.fastFrameProviderForTests
++        AXWindowService.fastFrameProviderForTests = { axRef in
++            axRef.windowId == fixture.handle.id.windowId ? frame : nil
++        }
++        defer { AXWindowService.fastFrameProviderForTests = previousFastFrameProvider }
++
++        fixture.controller.warpMouseCursor = { point in
++            warpedPoints.append(point)
++        }
++
++        fixture.controller.moveMouseToWindow(fixture.handle)
++
++        #expect(warpedPoints == [expectedPoint])
++    }
++
+     @Test @MainActor func toggleHiddenBarUpdatesCollapsedStateWithoutEnableGate() {
+         let settings = SettingsStore(defaults: makeFocusTestDefaults())
+         let controller = WMController(settings: settings)

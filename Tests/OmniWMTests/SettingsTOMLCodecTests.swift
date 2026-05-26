@@ -327,7 +327,9 @@ private extension String {
                 layout: .tile,
                 assignToWorkspace: "1",
                 minWidth: 400,
-                minHeight: 300
+                minHeight: 300,
+                activationKey: "C",
+                launchCommand: "env -u ELECTRON_RUN_AS_NODE open -b com.example.full"
             ),
             AppRule(
                 id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,

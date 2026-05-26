@@ -262,6 +262,15 @@ struct AppRuleDetailView: View {
                             draft.activationKey = normalizedActivationKeyText(newValue)
                         }
                 }
+
+                LabeledContent("Launch Command") {
+                    TextField(
+                        "env -u ELECTRON_RUN_AS_NODE open -b \(draft.bundleId)",
+                        text: $draft.launchCommand
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                }
             }
 
             Section("Window Behavior") {
@@ -476,6 +485,15 @@ struct AppRuleAddSheet: View {
                             .onChange(of: draft.activationKey) { _, newValue in
                                 draft.activationKey = normalizedActivationKeyText(newValue)
                             }
+                    }
+
+                    LabeledContent("Launch Command") {
+                        TextField(
+                            "env -u ELECTRON_RUN_AS_NODE open -b \(draft.bundleId)",
+                            text: $draft.launchCommand
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
                     }
                 }
 

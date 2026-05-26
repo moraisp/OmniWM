@@ -54,6 +54,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         case minWidth
         case minHeight
         case activationKey
+        case launchCommand
     }
 
     let id: UUID
@@ -70,6 +71,7 @@ struct AppRule: Codable, Identifiable, Equatable {
     var minWidth: Double?
     var minHeight: Double?
     var activationKey: String?
+    var launchCommand: String?
 
     init(
         id: UUID = UUID(),
@@ -85,7 +87,8 @@ struct AppRule: Codable, Identifiable, Equatable {
         assignToWorkspace: String? = nil,
         minWidth: Double? = nil,
         minHeight: Double? = nil,
-        activationKey: String? = nil
+        activationKey: String? = nil,
+        launchCommand: String? = nil
     ) {
         self.id = id
         self.bundleId = bundleId
@@ -101,6 +104,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         self.minWidth = minWidth
         self.minHeight = minHeight
         self.activationKey = Self.normalizedActivationKey(activationKey)
+        self.launchCommand = Self.normalizedLaunchCommand(launchCommand)
         normalizeLegacyManageOff()
     }
 
@@ -142,6 +146,7 @@ struct AppRule: Codable, Identifiable, Equatable {
             assignToWorkspace != nil ||
             minWidth != nil || minHeight != nil ||
             activationKey != nil ||
+            launchCommand != nil ||
             hasAdvancedMatchers
     }
 
@@ -161,6 +166,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         minWidth = try container.decodeIfPresent(Double.self, forKey: .minWidth)
         minHeight = try container.decodeIfPresent(Double.self, forKey: .minHeight)
         activationKey = Self.normalizedActivationKey(try container.decodeIfPresent(String.self, forKey: .activationKey))
+        launchCommand = Self.normalizedLaunchCommand(try container.decodeIfPresent(String.self, forKey: .launchCommand))
         normalizeLegacyManageOff()
     }
 
@@ -180,6 +186,7 @@ struct AppRule: Codable, Identifiable, Equatable {
         try container.encodeIfPresent(minWidth, forKey: .minWidth)
         try container.encodeIfPresent(minHeight, forKey: .minHeight)
         try container.encodeIfPresent(activationKey, forKey: .activationKey)
+        try container.encodeIfPresent(launchCommand, forKey: .launchCommand)
     }
 
     private mutating func normalizeLegacyManageOff() {
@@ -195,5 +202,11 @@ struct AppRule: Codable, Identifiable, Equatable {
         let uppercased = String(scalar).uppercased()
         guard uppercased.range(of: #"^[A-Z]$"#, options: .regularExpression) != nil else { return nil }
         return uppercased
+    }
+
+    static func normalizedLaunchCommand(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
